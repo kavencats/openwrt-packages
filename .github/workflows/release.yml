@@ -1,4 +1,4 @@
-name: Build packages
+name: Build packages luci-app-msd_lite
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Building packages
+      - name: Building packages luci-app-msd_lite
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
