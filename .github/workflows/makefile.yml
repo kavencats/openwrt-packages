@@ -22,12 +22,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Building packages
+      - name: Building packages luci-app-ddns-go
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
           FEEDNAME: packages_ci
-          PACKAGES: luci-app-ddns-go,luci-app-msd_lite,luci-theme-argon,luci-app-argon-config
+          PACKAGES: luci-app-ddns-go
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: Building packages luci-app-msd_lite
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-msd_lite
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: Building packages luci-theme-argon
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-theme-argon
           NO_REFRESH_CHECK: true
           V: s
 
