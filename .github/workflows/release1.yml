@@ -16,10 +16,6 @@ jobs:
           - mipsel_24kc
         SDK:
           - openwrt-25.12
-        pack:
-          - luci-app-ddns-go
-          - luci-app-msd_lite
-          - luic-themw-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +27,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
           FEEDNAME: packages_ci
-          PACKAGES: ${{ matrix.pack }
+          PACKAGES: luci-app-ddns-go
           NO_REFRESH_CHECK: true
           V: s
 
