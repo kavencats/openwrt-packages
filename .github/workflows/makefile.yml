@@ -29,7 +29,7 @@ jobs:
       - name: Building packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pack }
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
           FEEDNAME: packages_ci
           PACKAGES: ${{ matrix.pack }
           NO_REFRESH_CHECK: true
@@ -38,7 +38,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pack }
+          name: ${{ matrix.arch }}-${{ matrix.SDK }}
           path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
       - name: Upload packages
