@@ -27,7 +27,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
           FEEDNAME: packages_ci
-          PACKAGES: luci-app-ddns-go
+          PACKAGES: luci-app-msd_lite
           NO_REFRESH_CHECK: true
           V: s
 
