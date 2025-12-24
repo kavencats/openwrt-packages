@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Building packages luci-theme-argon
+      - name: Building packages luci-app-ddns-go
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
