@@ -16,43 +16,29 @@ jobs:
           - mipsel_24kc
         SDK:
           - openwrt-25.12
+        pack:
+          - luci-app-ddns-go
+          - luci-app-msd_lite
+          - luic-themw-argon
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Building packages luci-app-ddns-go
+      - name: Building packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pack }
           FEEDNAME: packages_ci
           PACKAGES: luci-app-ddns-go
-          NO_REFRESH_CHECK: true
-          V: s
-
-      - name: Building packages luci-app-msd_lite
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
-          FEEDNAME: packages_ci
-          PACKAGES: luci-app-msd_lite
-          NO_REFRESH_CHECK: true
-          V: s
-
-      - name: Building packages luci-theme-argon
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
-          FEEDNAME: packages_ci
-          PACKAGES: luci-theme-argon
           NO_REFRESH_CHECK: true
           V: s
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-${{ matrix.SDK }}
+          name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pack }
           path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
       - name: Upload packages
