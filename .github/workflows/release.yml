@@ -22,8 +22,8 @@ jobs:
           - openwrt-25.12
         pakgs:
           - luci-app-msd_lite
-          - luci-app-ddns-go
-          - luci-theme-argon
+          #- luci-app-ddns-go
+          #- luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +46,8 @@ jobs:
 
       # === 修复签名步骤 ===
       - name: Set up signing environment
+        env:
+          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
         run: |
           # 创建签名目录
           mkdir -p ~/.signing
@@ -58,8 +60,6 @@ jobs:
           
           # 从私钥提取公钥
           openssl rsa -in ~/.signing/private.pem -pubout -out ~/.signing/public.pem
-        env:
-          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
         shell: bash
 
       - name: Sign APK packages
