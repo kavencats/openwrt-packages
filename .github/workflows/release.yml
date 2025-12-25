@@ -1,13 +1,20 @@
 name: Build Cross-Architecture Packages
 
 on:
-  push:
-    tags:
-      - 'v*'  # 保留原触发条件
+  workflow_dispatch:  # 修改触发方式为手动触发
+    inputs:
+      arch:
+        description: 'Select architecture to build'
+        required: true
+        default: 'all'
+        options:
+          - all
+          - mipsel_24kc
+          - aarch64_cortex-a53
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }} (${{ matrix.pakgs }})
+    name: Build ${{ github.event.inputs.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -15,12 +22,15 @@ jobs:
         arch:
           - mipsel_24kc
           - aarch64_cortex-a53
-        SDK:
-          - openwrt-25.12
-        pakgs:
-          - luci-app-msd_lite
-          - luci-app-ddns-go
-          - luci-theme-argon
+        include:
+          - arch: mipsel_24kc
+            SDK: openwrt-25.12
+            FEEDNAME: packages_ci
+            PACKAGES: luci-app-msd_lite,luci-app-ddns-go,luci-theme-argon
+          - arch: aarch64_cortex-a53
+            SDK: openwrt-25.12
+            FEEDNAME: packages_ci
+            PACKAGES: luci-app-msd_lite,luci-app-ddns-go,luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -31,35 +41,27 @@ jobs:
       - name: Clean build directory
         run: rm -rf bin/*
 
-      # 构建指定架构的包
+      # 根据输入参数选择性构建
       - name: Build packages
+        if: github.event.inputs.arch == 'all' || matrix.arch == github.event.inputs.arch
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
-          FEEDNAME: packages_ci
-          PACKAGES: ${{ matrix.pakgs }}
+          FEEDNAME: ${{ matrix.FEEDNAME }}
+          PACKAGES: ${{ matrix.PACKAGES }}
           NO_REFRESH_CHECK: true
           V: s
 
-      # 创建架构专属Release（动态Tag）
+      # 创建架构专属Release
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}-${{ github.run_id }}
+          name: ${{ matrix.arch }}-Packages
+          tag_name: manual-build-${{ github.run_id }}
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      # 上传APK到对应Release
-      - name: Upload APKs
-        uses: ncipollo/release-action@v1
-        with:
-          name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}-${{ github.run_id }}
           files: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-          token: ${{ secrets.GITHUB_TOKEN }}
-          replace_existing: true
 
       # 上传通用工件（可选）
       - name: Upload Artifacts
