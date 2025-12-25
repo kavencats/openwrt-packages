@@ -1,73 +1,58 @@
-name: Build Cross-Architecture Packages
+name: Build packages
 
+# 修改为手动触发
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 添加手动触发支持
     inputs:
-      arch:
-        description: 'Select architecture to build (leave empty for all)'
+      version:       # 可选的版本输入参数
+        description: 'Package version (e.g. v1.0.0)'
         required: false
-        default: 'all'
-        options:
-          - all
-          - mipsel_24kc
-          - aarch64_cortex-a53
+        default: 'manual-build'
 
 jobs:
   build:
-    name: Build ${{ github.event.inputs.arch || 'All Architectures' }}
+    name: Build ${{ matrix.arch }}-${{ matrix.pakgs }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch_config:
-          - arch: mipsel_24kc
-            sdk: openwrt-25.12
-            feedname: packages_ci
-            packages: [luci-app-msd_lite, luci-app-ddns-go, luci-theme-argon]
-          - arch: aarch64_cortex-a53
-            sdk: openwrt-25.12
-            feedname: packages_ci
-            packages: [luci-app-msd_lite, luci-app-ddns-go, luci-theme-argon]
+        arch:
+          - mipsel_24kc
+          - aarch64_cortex-a53
+        SDK:
+          - openwrt-25.12
+        pakgs:
+          - luci-app-msd_lite
+          - luci-app-ddns-go
+          - luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 清理旧构建产物
-      - name: Clean build directory
-        run: rm -rf bin/*
-
-      # 顺序构建指定架构
-      - name: Build packages for ${{ matrix.arch_config.arch }}
+      - name: Building ${{ matrix.pakgs }}
+        uses: sbwml/openwrt-gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch_config.arch }}-${{ matrix.arch_config.sdk }}
-          FEEDNAME: ${{ matrix.arch_config.feedname }}
-          PACKAGES: ${{ matrix.arch_config.packages }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          FEEDNAME: packages_ci
+          PACKAGES: ${{ matrix.pakgs }}
           NO_REFRESH_CHECK: true
           V: s
-        run: |
-          #!/bin/bash
-          set -euxo pipefail
-          for pkg in ${PACKAGES[@]}; do
-            echo "Building $pkg for $ARCH"
-            ./build_single_package.sh $pkg
-          done
 
-      # 创建架构专属 Release
-      - name: Create Release
-        uses: ncipollo/release-action@v1
-        with:
-          name: ${{ matrix.arch_config.arch }}-Packages
-          tag_name: manual-build-${{ github.run_id }}-${{ matrix.arch_config.arch }}
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
-          files: bin/packages/${{ matrix.arch_config.arch }}/packages_ci/*.apk
-
-      # 上传通用工件（可选）
-      - name: Upload Artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch_config.arch }}-${{ matrix.arch_config.sdk }}
-          path: bin/packages/${{ matrix.arch_config.arch
+          name: ${{ matrix.arch }}-${{ matrix.SDK }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+
+      - name: Upload packages
+        uses: ncipollo/release-action@v1
+        with:
+          # 使用手动输入的版本号或默认值
+          tag: ${{ github.event.inputs.version || 'manual-build' }}
+          name: ${{ github.event.inputs.version || 'Manual Build' }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
