@@ -26,10 +26,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Building packages luci-app-msd_lite
+      - name: Building packages ${{ matrix.pakgs }}
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.pakgs }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
           FEEDNAME: packages_ci
           PACKAGES: ${{ matrix.pakgs }}
           NO_REFRESH_CHECK: true
@@ -38,8 +38,8 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-${{ matrix.pakgs }} 
-          path: bin/packages/${{ matrix.arch }}-${{ matrix.pakgs }}/packages_ci/*.apk
+          name: ${{ matrix.arch }}-${{ matrix.SDK }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
       - name: Upload packages
         uses: ncipollo/release-action@v1
@@ -48,4 +48,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
-          artifacts: "bin/packages/${{ matrix.arch }}-${{ matrix.pakgs }}/packages_ci/*.apk"
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
