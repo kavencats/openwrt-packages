@@ -35,16 +35,6 @@ jobs:
         id: timestamp
         run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      - name: Building packages ${{ matrix.pakgs }}
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
-          FEEDNAME: packages_ci
-          PACKAGES: ${{ matrix.pakgs }}
-          NO_REFRESH_CHECK: true
-          V: s
-
-      # === 修复签名步骤 ===
       - name: Set up signing environment
         env:
           PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
@@ -53,7 +43,7 @@ jobs:
           mkdir -p ~/.signing
           
           # 写入私钥 (使用正确的 secret 名称)
-          echo "${{ secrets.PACKAGE_SIGNING_KEY }}" > ~/.signing/private.pem
+          cp private.pem ~/.signing/private.pem
           
           # 设置权限
           chmod 600 ~/.signing/private.pem
@@ -61,6 +51,15 @@ jobs:
           # 从私钥提取公钥
           openssl rsa -in ~/.signing/private.pem -pubout -out ~/.signing/public.pem
         shell: bash
+
+      - name: Building packages ${{ matrix.pakgs }}
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          FEEDNAME: packages_ci
+          PACKAGES: ${{ matrix.pakgs }}
+          NO_REFRESH_CHECK: true
+          V: s
 
       - name: Sign APK packages
         run: |
