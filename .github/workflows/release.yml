@@ -1,13 +1,13 @@
-name: Build packages
+name: Build Cross-Architecture Packages
 
 on:
   push:
     tags:
-      - v*
+      - 'v*'  # 保留原触发条件
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.SDK }}
+    name: Build ${{ matrix.arch }} (${{ matrix.pakgs }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -28,10 +28,11 @@ jobs:
           fetch-depth: 0
 
       # 清理旧构建产物
-      - name: Clean up
+      - name: Clean build directory
         run: rm -rf bin/*
 
-      - name: Building packages ${{ matrix.pakgs }}
+      # 构建指定架构的包
+      - name: Build packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
@@ -40,27 +41,29 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      # 创建架构专属Artifact
-      - name: Upload architecture-specific artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ github.run_id }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-
-      # 创建Release并上传文件（使用GitHub CLI）
+      # 创建架构专属Release
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ matrix.arch }}-${{ matrix.SDK }}
-          tag: ${{ github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}
           draft: false
           prerelease: false
-          allowUpdates: true
-          overwrite: true
-          files: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 清理已上传文件（避免占用空间）
-      - name: Cleanup after release
-        run: rm -rf bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+      # 上传APK到对应Release
+      - name: Upload APKs
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}
+          files: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
+          replace_existing: true
+
+      # 上传通用工件（可选）
+      #- name: Upload Artifacts
+      #  uses: actions/upload-artifact@v4
+      #  with:
+      #    name: ${{ matrix.arch }}-${{ matrix.SDK }}
+      #    path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
