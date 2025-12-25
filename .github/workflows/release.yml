@@ -22,8 +22,8 @@ jobs:
           - openwrt-25.12
         pakgs:
           - luci-app-msd_lite
-          #- luci-app-ddns-go
-          #- luci-theme-argon
+          - luci-app-ddns-go
+          - luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
