@@ -41,12 +41,12 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      # 创建架构专属Release
+      # 创建架构专属Release（动态Tag）
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
           name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}
+          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}-${{ github.run_id }}
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -56,14 +56,14 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           name: ${{ matrix.arch }}-Packages-${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}
+          tag_name: ${{ github.ref_name }}-${{ matrix.arch }}-${{ github.run_id }}
           files: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
           replace_existing: true
 
       # 上传通用工件（可选）
-      #- name: Upload Artifacts
-      #  uses: actions/upload-artifact@v4
-      #  with:
-      #    name: ${{ matrix.arch }}-${{ matrix.SDK }}
-      #    path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}-${{ matrix.SDK }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
