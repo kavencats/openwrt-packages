@@ -52,7 +52,7 @@ jobs:
           openssl rsa -in ~/.signing/private.pem -pubout -out ~/.signing/public.pem
         shell: bash
 
-      - name: Building packages ${{ matrix.pakgs }}
+      - name: Building packages for ${{ matrix.pakgs }}
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
@@ -61,47 +61,19 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      - name: Sign APK packages
-        run: |
-          for apk in bin/packages/${{ matrix.arch }}/packages_ci/*.apk; do
-            if [ -f "$apk" ]; then
-              echo "Signing $apk"
-              
-              # 签名文件
-              openssl dgst -sha256 -sign ~/.signing/private.pem -out "$apk.sig" "$apk"
-              
-              # 验证签名
-              if openssl dgst -sha256 -verify ~/.signing/public.pem -signature "$apk.sig" "$apk"; then
-                echo "✅ Signature verified for $apk"
-              else
-                echo "❌ Signature verification failed for $apk"
-                exit 1
-              fi
-              
-              # 创建签名包
-              cat "$apk" "$apk.sig" > "${apk%.*}_signed.apk"
-            fi
-          done
-        shell: bash
-      # === 签名步骤结束 ===
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pakgs }}-${{ steps.timestamp.outputs.time }}
-          path: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
       - name: Upload packages for ${{ matrix.arch }}-${{ matrix.pakgs }}
         uses: ncipollo/release-action@v1
         with:
+          # 标签包含架构
           tag: ${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}
           name: "${{ github.event.inputs.version || 'Manual Build' }} (${{ matrix.arch }})"
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
-          artifacts: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
