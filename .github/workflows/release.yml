@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build ${{ matrix.arch }}-${{ matrix.pakgs }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -16,6 +16,10 @@ jobs:
           - mipsel_24kc
         SDK:
           - openwrt-25.12
+        pakgs:
+          - luci-app-msd_lite
+          - luci-app-ddns-go
+          - luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -25,17 +29,17 @@ jobs:
       - name: Building packages luci-app-msd_lite
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.pakgs }}
           FEEDNAME: packages_ci
-          PACKAGES: luci-app-msd_lite
+          PACKAGES: ${{ matrix.pakgs }}
           NO_REFRESH_CHECK: true
           V: s
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-${{ matrix.SDK }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+          name: ${{ matrix.arch }}-${{ matrix.pakgs }} 
+          path: bin/packages/${{ matrix.arch }}-${{ matrix.pakgs }}/packages_ci/*.apk
 
       - name: Upload packages
         uses: ncipollo/release-action@v1
@@ -44,4 +48,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
-          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
+          artifacts: "bin/packages/${{ matrix.arch }}-${{ matrix.pakgs }}/packages_ci/*.apk"
