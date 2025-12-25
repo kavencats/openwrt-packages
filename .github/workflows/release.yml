@@ -51,7 +51,6 @@ jobs:
           set -euxo pipefail
           for pkg in ${PACKAGES[@]}; do
             echo "Building $pkg for $ARCH"
-            # 使用 sbwml/openwrt-gh-action-sdk 的单包构建模式
             ./build_single_package.sh $pkg
           done
 
@@ -71,4 +70,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.arch_config.arch }}-${{ matrix.arch_config.sdk }}
-          path: bin/packages/${{ matrix.arch_config.arch }}/packages_ci/*.apk
+          path: bin/packages/${{ matrix.arch_config.arch
