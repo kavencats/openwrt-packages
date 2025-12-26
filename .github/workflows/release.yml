@@ -22,8 +22,8 @@ jobs:
           - openwrt-25.12
         pakgs:
           - luci-app-msd_lite
-          #- luci-app-ddns-go
-          #- luci-theme-argon
+          - luci-app-ddns-go
+          - luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -35,37 +35,7 @@ jobs:
         id: timestamp
         run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      # === Usign 签名设置 ===
-      - name: Install Usign
-        run: |
-          # 安装依赖
-          sudo apt-get update
-          sudo apt-get install -y usign
-          
-          # 验证安装
-          usign -V
-
-      - name: Set up signing environment
-        run: |
-          # 创建签名目录
-          mkdir -p ~/.signing
-
-          usign -G -s usign.key -p usign.pub
-          
-          # 写入私钥
-          echo usign.key > ~/.signing/usign.key
-          chmod 600 ~/.signing/usign.key
-          
-          # 生成公钥
-          usign -P -s ~/.signing/usign.key -p ~/.signing/usign.pub
-          
-          # 显示公钥指纹
-          echo "公钥指纹:"
-          usign -F -p ~/.signing/usign.pub
-        env:
-          USIGN_PRIVATE_KEY: ${{ secrets.USIGN_PRIVATE_KEY }}
-
-      - name: Building packages ${{ matrix.pakgs }}
+      - name: Building packages for ${{ matrix.pakgs }}
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
@@ -74,68 +44,58 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      - name: Sign APK packages
-        run: |
-          for apk in bin/packages/${{ matrix.arch }}/packages_ci/*.apk; do
-            if [ -f "$apk" ]; then
-              echo "Signing $apk"
-              
-              # 使用 Usign 签名
-              usign -S -s ~/.signing/usign.key -m "$apk"
-              
-              # 验证签名
-              if usign -V -p ~/.signing/usign.pub -m "$apk"; then
-                echo "✅ Signature verified for $apk"
-              else
-                echo "❌ Signature verification failed for $apk"
-                exit 1
-              fi
-              
-              # 创建签名包
-              cat "$apk" "$apk.sig" > "${apk%.*}_signed.apk"
-            fi
-          done
-
-      - name: Prepare public key
-        run: |
-          # 复制公钥用于上传
-          cp ~/.signing/usign.pub public-${{ matrix.arch }}.pem
-          
-          # 显示公钥内容
-          echo "公钥内容:"
-          cat ~/.signing/usign.pub
-        shell: bash
-
-      # === 上传构件 ===
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pakgs }}-${{ steps.timestamp.outputs.time }}
-          path: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
-            public-${{ matrix.arch }}.pem
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
-      - name: Upload packages for ${{ matrix.arch }}-${{ matrix.pakgs }}
+      # 删除旧 release（如果存在）
+      - name: Delete old release
+        run: |
+          TAG_NAME="${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}"
+          REPO="${GITHUB_REPOSITORY}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          
+          # 检查 release 是否存在
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG_NAME")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            # 获取 release ID
+            RELEASE_ID=$(curl -s \
+              -H "Authorization: token $TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG_NAME" | \
+              grep -m 1 '"id":' | cut -d ':' -f 2 | tr -d ', ')
+            
+            # 删除 release
+            curl -X DELETE -H "Authorization: token $TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/$RELEASE_ID"
+            
+            # 删除 tag
+            curl -X DELETE -H "Authorization: token $TOKEN" \
+              "https://api.github.com/repos/$REPO/git/refs/tags/$TAG_NAME"
+            
+            echo "Deleted existing release and tag: $TAG_NAME"
+          else
+            echo "No existing release found for tag: $TAG_NAME"
+          fi
+        shell: bash
+
+      - name: Upload packages for ${{ matrix.pakgs }}
         uses: ncipollo/release-action@v1
         with:
+          # 标签包含架构
           tag: ${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}
           name: "${{ github.event.inputs.version || 'Manual Build' }} (${{ matrix.arch }})"
           token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
+          allowUpdates: false
           replacesArtifacts: true
-          artifacts: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
-            public-${{ matrix.arch }}.pem
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
           body: |
             ## Package Information
             - Architecture: ${{ matrix.arch }}
             - SDK: ${{ matrix.SDK }}
             - Package: ${{ matrix.pakgs }}
             - Build Time: ${{ steps.timestamp.outputs.time }}
-            
-            ## Verification Instructions
-            1. Download the signed package (*_signed.apk) and signature file (.sig)
-            2. Import the public key:
