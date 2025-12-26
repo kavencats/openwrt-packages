@@ -24,6 +24,7 @@ jobs:
           - luci-app-msd_lite
           - luci-app-ddns-go
           - luci-theme-argon
+          - luci-app-tcpdump
 
     steps:
       - uses: actions/checkout@v4
