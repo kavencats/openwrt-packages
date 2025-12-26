@@ -50,39 +50,6 @@ jobs:
           name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pakgs }}-${{ steps.timestamp.outputs.time }}
           path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
 
-      # 删除旧 release（如果存在）
-      - name: Delete old release
-        run: |
-          TAG_NAME="${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}"
-          REPO="${GITHUB_REPOSITORY}"
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          
-          # 检查 release 是否存在
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token $TOKEN" \
-            "https://api.github.com/repos/$REPO/releases/tags/$TAG_NAME")
-          
-          if [ "$HTTP_CODE" = "200" ]; then
-            # 获取 release ID
-            RELEASE_ID=$(curl -s \
-              -H "Authorization: token $TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/tags/$TAG_NAME" | \
-              grep -m 1 '"id":' | cut -d ':' -f 2 | tr -d ', ')
-            
-            # 删除 release
-            curl -X DELETE -H "Authorization: token $TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/$RELEASE_ID"
-            
-            # 删除 tag
-            curl -X DELETE -H "Authorization: token $TOKEN" \
-              "https://api.github.com/repos/$REPO/git/refs/tags/$TAG_NAME"
-            
-            echo "Deleted existing release and tag: $TAG_NAME"
-          else
-            echo "No existing release found for tag: $TAG_NAME"
-          fi
-        shell: bash
-
       - name: Upload packages for ${{ matrix.pakgs }}
         uses: ncipollo/release-action@v1
         with:
@@ -90,7 +57,7 @@ jobs:
           tag: ${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}
           name: "${{ github.event.inputs.version || 'Manual Build' }} (${{ matrix.arch }})"
           token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: false
+          allowUpdates: true
           replacesArtifacts: true
           artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
           body: |
