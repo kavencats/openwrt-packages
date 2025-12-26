@@ -40,15 +40,7 @@ jobs:
         run: |
           # 安装依赖
           sudo apt-get update
-          sudo apt-get install -y build-essential git
-          
-          # 克隆并编译 Usign
-          git clone https://git.openwrt.org/project/usign.git
-          cd usign
-          make
-          sudo cp usign /usr/local/bin/
-          cd ..
-          rm -rf usign
+          sudo apt-get install -y usign
           
           # 验证安装
           usign -V
