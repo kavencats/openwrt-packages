@@ -35,15 +35,6 @@ jobs:
         id: timestamp
         run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      - name: Building packages ${{ matrix.pakgs }}
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
-          FEEDNAME: packages_ci
-          PACKAGES: ${{ matrix.pakgs }}
-          NO_REFRESH_CHECK: true
-          V: s
-
       # === Usign 签名设置 ===
       - name: Install Usign
         run: |
@@ -81,6 +72,15 @@ jobs:
           usign -F -p ~/.signing/usign.pub
         env:
           USIGN_PRIVATE_KEY: ${{ secrets.USIGN_PRIVATE_KEY }}
+
+      - name: Building packages ${{ matrix.pakgs }}
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
+          FEEDNAME: packages_ci
+          PACKAGES: ${{ matrix.pakgs }}
+          NO_REFRESH_CHECK: true
+          V: s
 
       - name: Sign APK packages
         run: |
