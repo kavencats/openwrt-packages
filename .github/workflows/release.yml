@@ -1,4 +1,4 @@
-name: Build and Sign Packages
+name: Build and Sign Packages with Usign
 
 on:
   workflow_dispatch:
@@ -22,8 +22,8 @@ jobs:
           - openwrt-25.12
         pakgs:
           - luci-app-msd_lite
-          - luci-app-ddns-go
-          - luci-theme-argon
+          #- luci-app-ddns-go
+          #- luci-theme-argon
 
     steps:
       - uses: actions/checkout@v4
@@ -35,77 +35,7 @@ jobs:
         id: timestamp
         run: echo "time=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      # === 新增：删除旧 releases ===
-      - name: Delete old releases
-        if: ${{ github.event.inputs.cleanup_old_releases == 'true' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const tagPrefix = '${{ github.event.inputs.version || 'manual-build' }}';
-            
-            try {
-              // 获取所有 releases
-              const releases = await github.rest.repos.listReleases({ owner, repo });
-              
-              // 过滤出匹配的 releases
-              const matchingReleases = releases.data.filter(release => 
-                release.tag_name.startsWith(tagPrefix)
-              );
-              
-              if (matchingReleases.length === 0) {
-                console.log("No matching releases found to delete");
-                return;
-              }
-              
-              // 删除每个匹配的 release
-              for (const release of matchingReleases) {
-                console.log(`Deleting release: ${release.tag_name}`);
-                await github.rest.repos.deleteRelease({
-                  owner,
-                  repo,
-                  release_id: release.id
-                });
-                
-                // 删除关联的 tag
-                try {
-                  await github.rest.git.deleteRef({
-                    owner,
-                    repo,
-                    ref: `tags/${release.tag_name}`
-                  });
-                  console.log(`Deleted tag: ${release.tag_name}`);
-                } catch (refError) {
-                  console.warn(`Failed to delete tag ${release.tag_name}: ${refError.message}`);
-                }
-              }
-              
-              console.log(`Deleted ${matchingReleases.length} old releases`);
-            } catch (error) {
-              console.error(`Error deleting releases: ${error.message}`);
-              core.setFailed(error.message);
-            }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up signing environment
-        env:
-          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
-        run: |
-          # 创建签名目录
-          mkdir -p ~/.signing
-          
-          # 写入私钥 (使用正确的 secret 名称)
-          cp private.pem ~/.signing/private.pem
-          
-          # 设置权限
-          chmod 600 ~/.signing/private.pem
-          
-          # 从私钥提取公钥
-          openssl rsa -in ~/.signing/private.pem -pubout -out ~/.signing/public.pem
-        shell: bash
-
-      - name: Building packages for ${{ matrix.pakgs }}
+      - name: Building packages ${{ matrix.pakgs }}
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.SDK }}
@@ -114,19 +44,106 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
+      # === Usign 签名设置 ===
+      - name: Install Usign
+        run: |
+          # 安装依赖
+          sudo apt-get update
+          sudo apt-get install -y build-essential git
+          
+          # 克隆并编译 Usign
+          git clone https://git.openwrt.org/project/usign.git
+          cd usign
+          make
+          sudo cp usign /usr/local/bin/
+          cd ..
+          rm -rf usign
+          
+          # 验证安装
+          usign -V
+
+      - name: Set up signing environment
+        run: |
+          # 创建签名目录
+          mkdir -p ~/.signing
+
+          usign -G -s usign.key -p usign.pub
+          
+          # 写入私钥
+          echo usign.key > ~/.signing/usign.key
+          chmod 600 ~/.signing/usign.key
+          
+          # 生成公钥
+          usign -P -s ~/.signing/usign.key -p ~/.signing/usign.pub
+          
+          # 显示公钥指纹
+          echo "公钥指纹:"
+          usign -F -p ~/.signing/usign.pub
+        env:
+          USIGN_PRIVATE_KEY: ${{ secrets.USIGN_PRIVATE_KEY }}
+
+      - name: Sign APK packages
+        run: |
+          for apk in bin/packages/${{ matrix.arch }}/packages_ci/*.apk; do
+            if [ -f "$apk" ]; then
+              echo "Signing $apk"
+              
+              # 使用 Usign 签名
+              usign -S -s ~/.signing/usign.key -m "$apk"
+              
+              # 验证签名
+              if usign -V -p ~/.signing/usign.pub -m "$apk"; then
+                echo "✅ Signature verified for $apk"
+              else
+                echo "❌ Signature verification failed for $apk"
+                exit 1
+              fi
+              
+              # 创建签名包
+              cat "$apk" "$apk.sig" > "${apk%.*}_signed.apk"
+            fi
+          done
+
+      - name: Prepare public key
+        run: |
+          # 复制公钥用于上传
+          cp ~/.signing/usign.pub public-${{ matrix.arch }}.pem
+          
+          # 显示公钥内容
+          echo "公钥内容:"
+          cat ~/.signing/usign.pub
+        shell: bash
+
+      # === 上传构件 ===
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.arch }}-${{ matrix.SDK }}-${{ matrix.pakgs }}-${{ steps.timestamp.outputs.time }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+          path: |
+            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
+            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
+            public-${{ matrix.arch }}.pem
 
       - name: Upload packages for ${{ matrix.arch }}-${{ matrix.pakgs }}
         uses: ncipollo/release-action@v1
         with:
-          # 标签包含架构
           tag: ${{ github.event.inputs.version || 'manual-build' }}-${{ matrix.arch }}
           name: "${{ github.event.inputs.version || 'Manual Build' }} (${{ matrix.arch }})"
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
-          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.apk"
+          artifacts: |
+            bin/packages/${{ matrix.arch }}/packages_ci/*_signed.apk
+            bin/packages/${{ matrix.arch }}/packages_ci/*.sig
+            public-${{ matrix.arch }}.pem
+          body: |
+            ## Package Information
+            - Architecture: ${{ matrix.arch }}
+            - SDK: ${{ matrix.SDK }}
+            - Package: ${{ matrix.pakgs }}
+            - Build Time: ${{ steps.timestamp.outputs.time }}
+            
+            ## Verification Instructions
+            1. Download the signed package (*_signed.apk) and signature file (.sig)
+            2. Import the public key:
