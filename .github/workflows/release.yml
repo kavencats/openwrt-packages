@@ -1,4 +1,4 @@
-name: Build and Sign Packages with Usign
+name: Build apk Packages 
 
 on:
   workflow_dispatch:
@@ -64,5 +64,4 @@ jobs:
             ## Package Information
             - Architecture: ${{ matrix.arch }}
             - SDK: ${{ matrix.SDK }}
-            - Package: ${{ matrix.pakgs }}
             - Build Time: ${{ steps.timestamp.outputs.time }}
