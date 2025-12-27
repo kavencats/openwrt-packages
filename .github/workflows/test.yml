@@ -19,9 +19,10 @@ jobs:
            cd $GITHUB_WORKSPACE
            rm -rf luci-app-autorepeater
            echo “del”
-           ls luci-app-autorepeater
+           ls $GITHUB_WORKSPACE
            git clone https://github.com/peter-tank/luci-app-autorepeater.git
-           ls luci-app-autorepeater
+           echo “cloned”
+           ls $GITHUB_WORKSPACE
 
       - name: Commit and push changes
         run: |
