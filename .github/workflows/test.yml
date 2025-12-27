@@ -20,14 +20,12 @@ jobs:
     - name: Clone target repository
       run: |
         git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
-        cd luci-app-autorepeater
-        echo "Cloned repository structure:"
-        ls -R
 
     - name: Commit and push changes
       run: |
         git config --global user.name "GitHub Actions Bot"
         git config --global user.email "actions@github.com"
+        sudo timedatectl set-timezone "Asia/Shanghai"
         
         # 添加所有更改
         git add .
