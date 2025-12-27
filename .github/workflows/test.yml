@@ -24,7 +24,8 @@ jobs:
 
       - name: Clone target repository
         run: |
-          git clone https://github.com/peter-tank/luci-app-autorepeater.git {{$GITHUB_WORKSPACE}}/luci-app-autorepeater
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
 
       - name: Commit and push changes
         run: |
