@@ -17,7 +17,9 @@ jobs:
         run: |
            echo "Workspace is at: $GITHUB_WORKSPACE"
            cd $GITHUB_WORKSPACE
-           git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
+           rm -rf luci-app-autorepeater
+           git clone https://github.com/peter-tank/luci-app-autorepeater.git
+           ls luci-app-autorepeater
 
       - name: Commit and push changes
         run: |
