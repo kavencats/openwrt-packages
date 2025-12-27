@@ -1,1 +1,41 @@
+name: Display GitHub Token Info
 
+on: 
+   workflow_dispatch:
+
+jobs:
+  show-token-info:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Display token info
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动注入的令牌
+        run: |
+          # 显示令牌长度（不显示实际内容）
+          echo "Token length: ${#TOKEN} characters"
+          
+          # 调用GitHub API验证令牌（返回公开信息）
+          echo "Calling GitHub API with token..."
+          response=$(curl -s -o /tmp/api_response.json -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            https://api.github.com/repos/${{ github.repository }})
+          
+          # 显示API响应状态
+          echo "API Response Status: $response"
+          
+          # 解析并显示部分响应数据
+          if [ "$response" = "200" ]; then
+            echo "Repository Info:"
+            jq '{name, full_name, private}' /tmp/api_response.json
+          else
+            echo "API request failed with status $response"
+            cat /tmp/api_response.json
+          fi
+
+      - name: Show environment variables (masked)
+        run: |
+          echo "GITHUB_TOKEN is available in environment: ${#GITHUB_TOKEN} chars"
+          echo "Attempting direct print (will be masked): $GITHUB_TOKEN"
