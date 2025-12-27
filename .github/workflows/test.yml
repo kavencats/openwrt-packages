@@ -12,28 +12,10 @@ jobs:
       contents: write  # 允许提交更改
 
     steps:
-    - name: Checkout current repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1  # 获取完整历史记录
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Clone target repository
-      run: |
-        rm -rf luci-app-autorepeater
-        git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
-
-    - name: Commit and push changes
-      run: |
-        git config --global user.name "GitHub Actions Bot"
-        git config --global user.email "actions@github.com"
-        
-        # 添加所有更改
-        git add .
-        
-        # 检查是否有实际更改
-        if git diff-index --quiet HEAD --; then
-          echo "No changes detected"
-        else
-          git commit -m "Extend groups configuration and update files"
-          git push origin HEAD:${GITHUB_REF#refs/heads/}
-        fi
+      - name: Display workspace variable
+        run: |
+           echo "Workspace is at: $GITHUB_WORKSPACE"
+           ls $GITHUB_WORKSPACE
