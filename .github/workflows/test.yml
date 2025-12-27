@@ -18,6 +18,8 @@ jobs:
            echo "Workspace is at: $GITHUB_WORKSPACE"
            cd $GITHUB_WORKSPACE
            rm -rf luci-app-autorepeater
+           echo “del”
+           ls luci-app-autorepeater
            git clone https://github.com/peter-tank/luci-app-autorepeater.git
            ls luci-app-autorepeater
 
@@ -25,6 +27,8 @@ jobs:
         run: |
            git config --global user.name "GitHub Actions Bot"
            git config --global user.email "actions@github.com"
+
+           cd $GITHUB_WORKSPACE
 
            # 添加所有更改
            git add .
