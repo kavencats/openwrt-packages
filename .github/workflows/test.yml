@@ -19,6 +19,7 @@ jobs:
 
     - name: Clone target repository
       run: |
+        rm -rf luci-app-autorepeater
         git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
 
     - name: Commit and push changes
