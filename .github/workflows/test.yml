@@ -19,3 +19,27 @@ jobs:
         run: |
            echo "Workspace is at: $GITHUB_WORKSPACE"
            ls $GITHUB_WORKSPACE
+           cd $GITHUB_WORKSPACE
+           rm -rf luci-app-autorepeater
+
+      - name: Clone target repository
+        run: |
+          git clone https://github.com/peter-tank/luci-app-autorepeater.git {{$GITHUB_WORKSPACE}}/luci-app-autorepeater
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+          cd {{$GITHUB_WORKSPACE}}
+
+          # 添加所有更改
+          git add .
+          
+          # 检查是否有实际更改
+          if git diff-index --quiet HEAD --; then
+             echo "No changes detected"
+          else
+            git commit -m "Extend groups configuration and update files"
+            git push origin HEAD:${GITHUB_REF#refs/heads/}
+          fi
