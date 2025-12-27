@@ -1,8 +1,6 @@
 name: Update Repository with Extended Groups
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:  # 允许手动触发
 
 jobs:
@@ -21,18 +19,16 @@ jobs:
            ls $GITHUB_WORKSPACE
            cd $GITHUB_WORKSPACE
            rm -rf luci-app-autorepeater
+           ls
 
-      - name: Clone target repository
-        run: |
-          cd $GITHUB_WORKSPACE
-          git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
+      #- name: Clone target repository
+      #  run: |
+      #    git clone https://github.com/peter-tank/luci-app-autorepeater.git luci-app-autorepeater
 
       - name: Commit and push changes
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-
-          cd {{$GITHUB_WORKSPACE}}
 
           # 添加所有更改
           git add .
