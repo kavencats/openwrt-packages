@@ -26,13 +26,10 @@ jobs:
           - luci-theme-argon
           - luci-app-oaf
           - luci-app-taskplan
-          - luci-app-samba4
           - luci-app-diskman
           - luci-app-smbuser
           - luci-app-tcpdump
-          - luci-app-temp-status
           - luci-app-adguardhome
-          - luci-app-watchcat
 
     steps:
       - uses: actions/checkout@v4
