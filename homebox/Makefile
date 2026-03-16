@@ -6,12 +6,12 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=homebox
 PKG_VERSION:=1.0.1
-PKG_RELEASE:=4
+PKG_RELEASE:=6
 
-ifneq ($(filter aarch64%,$(ARCH)),)
+ifeq ($(ARCH),aarch64)
   PKG_ARCH:=arm64
   PKG_HASH:=skip
-else ifneq ($(filter arm%,$(ARCH)),)
+else ifeq ($(ARCH),arm)
   PKG_ARCH:=armv7
   PKG_HASH:=skip
 else ifeq ($(ARCH),i386)
@@ -20,14 +20,14 @@ else ifeq ($(ARCH),i386)
 else ifeq ($(ARCH),x86_64)
   PKG_ARCH:=amd64
   PKG_HASH:=skip
-else
-    $(error Unsupported architecture: $(ARCH))
 endif
 
+PKG_LICENSE:=Proprietary
+PKG_LICENSE_FILES:=LICENSE
+PKG_MAINTAINER:=sirpdboy <herboy2008@gmail.com>
 PKG_SOURCE:=homebox-linux-$(PKG_ARCH)-musl-v$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/sirpdboy/homebox/releases/download/v$(PKG_VERSION)/
-
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_ARCH)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -38,7 +38,6 @@ define Package/$(PKG_NAME)
 	TITLE:=Home Local Network Speed Test Tool
 	URL:=https://github.com/XGHeaven/homebox
 	DEPENDS:=@(i386||x86_64||arm||aarch64)
-	MAINTAINER:=sirpdboy <herboy2008@gmail.com>
 endef
 
 define Package/$(PKG_NAME)/description
@@ -48,7 +47,7 @@ endef
 define Build/Prepare
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-			$(TAR) -zxf $(DL_DIR)/$(PKG_SOURCE) -C . ; \
+			$(TAR) -zxf $(DL_DIR)/homebox-linux-$(PKG_ARCH)-musl-v$(PKG_VERSION).tar.gz -C . ; \
 		popd ; \
 	)
 endef
@@ -58,7 +57,7 @@ endef
 
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/$(PKG_NAME) $(1)/usr/bin/homebox
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/homebox $(1)/usr/bin/homebox
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)))
