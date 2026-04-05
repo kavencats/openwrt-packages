@@ -10,8 +10,8 @@ THEME_NAME:=alpha
 THEME_TITLE:=Alpha
 
 PKG_NAME:=luci-theme-$(THEME_NAME)
-PKG_VERSION:=3.9.6_beta
-PKG_RELEASE:=2
+PKG_VERSION:=3.9.7_beta2
+PKG_RELEASE:=5
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -19,7 +19,7 @@ define Package/luci-theme-$(THEME_NAME)
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=9. Themes
-  DEPENDS:=+libc
+  DEPENDS:=+libc +luci-app-alpha-config
   TITLE:=LuCi Theme For OpenWrt And Alpha OS ONLY - $(THEME_TITLE)
   URL:=http://facebook.com/derisamedia/
   PKGARCH:=all

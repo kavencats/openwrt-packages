@@ -4,6 +4,247 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [2.0.3] - 2026-04-03
+
+### 修复
+
+- **微信插件安装失败 (exit: 127)**: 当 Gateway 未运行或路径检测失败时，`npx` 命令指向不存在的路径导致安装失败
+  - 根因: `get_actual_install_path()` 依赖 Gateway 进程运行时返回正确路径，Gateway 未启动时返回默认值 `/opt/openclaw`，但实际安装路径可能是 `/mnt/data/openclaw` 等自定义路径
+  - 修复: `action_wechat_install()` 和 `action_wechat_upgrade_plugin()` 新增多层路径校验逻辑：
+    1. 先检查默认检测到的 `npx` 是否存在
+    2. 不存在时回退到 UCI 配置的 `install_path`
+    3. 最后遍历常见备用路径 (`/mnt/data/openclaw`, `/opt/openclaw`, `/overlay/upper/opt/openclaw`)
+    4. 所有路径都无效时返回明确的错误提示，而非模糊的 exit 127
+
+---
+
+## [2.0.2] - 2026-03-31
+
+### 新增功能
+
+#### 适配微信通道插件 (openclaw-weixin)
+
+- **多账号操作面板**: 新增完善的多账号登录登出功能机制，重构 Lua API (`login_cmd`/`logout_cmd`/`install_cmd`/`upgrade_cmd`) 使其支持精细化的多实例运行调度。
+- **登录交互优化**: 解决由于未完成登录流程导致的环境锁定问题，后台新增自愈能力 (`pkill -f 'channels login.*openclaw-weixin'`)。
+- **安全沙箱无缝衔接**: 修复了 Web 触发命令时的 `blocked plugin candidate: suspicious ownership` 安全警告，完整平滑降权至 `openclaw` 用户组执行。
+
+**💡 微信通道使用细节提醒：**
+1. **多开隔离**：所有上号的微信机器人互不干扰，尽管在 Web 控制台大盘上聊天日志看起来像在一起，但由于后端存在独立的 `BotID / AccountID / Session` 多元结构体鉴权区分，他们在底层是**绝对隔离**的记忆！
+2. **退出登录**：遇到登录卡死或想强制下线，点击界面对应微信号的“退出登录”即可强制切除对应后端通道进程。
+
+#### 支持自定义安装路径
+
+- **功能描述**: 用户现在可以将 OpenClaw 运行环境安装到自定义路径（如第二块硬盘 `/mnt/data`）
+- **LuCI 界面**: 安装对话框增加自定义路径输入框，支持实时检测目标路径的可用空间
+- **系统检测**: 安装前系统配置检测会检测自定义路径的磁盘空间，而非默认的 `/opt`
+- **服务状态**: 状态 API 返回当前安装路径信息
+- **最小空间提示**: 安装界面提示最小需要 2GB 可用空间
+
+#### 技术实现
+
+- 新增 UCI 配置项 `openclaw.main.install_path`，默认值为 `/opt`
+- 程序会在用户指定路径下自动创建 `openclaw` 目录进行安装
+  - 例如：用户输入 `/mnt/data`，实际安装路径为 `/mnt/data/openclaw`
+- 所有脚本和配置文件支持从 UCI 读取自定义路径：
+  - `openclaw-env`: 通过 `OC_INSTALL_PATH` 环境变量或 UCI 配置
+  - `init.d/openclaw`: 启动时从 UCI 读取路径
+  - `oc-config.sh`: 支持自定义路径的环境变量
+  - `profile.d/openclaw.sh`: SSH 环境变量支持
+  - `uci-defaults/99-openclaw`: 首次安装初始化支持
+
+
+### 感谢
+
+感谢 @hotwa 提供的修改思路和建议。
+
+---
+
+## [2.0.1] - 2026-03-30
+
+### 适配 OpenClaw v2026.3.28
+
+#### 版本变更
+- **OC_TESTED_VERSION**: 从 2026.3.13 更新到 2026.3.28
+- **磁盘空间要求**: 从 1.5GB 提升到 2GB (OpenClaw v2026.3.28 包体积约 200MB)
+
+#### 兼容性分析
+- **Node.js 版本**: v2026.3.28 要求 >= 22.14.0 (降低了要求，从 v2026.3.13 的 >= 22.16.0)
+- **入口文件**: 无变化，仍为 `openclaw.mjs`
+- **配置 Schema**: 向后兼容，无需迁移
+- **API**: 向后兼容
+
+#### 包体积变化
+- v2026.3.13: ~94MB (4,730 文件)
+- v2026.3.28: ~200MB (19,887 文件)
+- 文件数量增加 4x+，包体积增加 2x+
+
+#### 新增 Plugin SDK 导出 (20+)
+
+新增 AI 提供商原生支持 SDK:
+- `plugin-sdk/xai` — xAI (Grok) API 支持
+- `plugin-sdk/vllm` — vLLM 高性能推理引擎支持
+- `plugin-sdk/ollama` — Ollama 本地模型原生 SDK
+- `plugin-sdk/openai` — OpenAI 原生 SDK
+- `plugin-sdk/sglang` — SGLang 推理引擎支持
+- `plugin-sdk/chutes` — Chutes AI 平台支持
+- `plugin-sdk/google` — Google AI SDK
+- `plugin-sdk/nvidia` — NVIDIA NIM API 支持
+- `plugin-sdk/venice` — Venice AI 支持
+- `plugin-sdk/minimax` — MiniMax API 原生 SDK
+- `plugin-sdk/mistral` — Mistral AI 原生 SDK
+- `plugin-sdk/qianfan` — 百度千帆大模型 SDK
+
+新增功能模块 SDK:
+- `plugin-sdk/zod` — Zod schema 验证支持
+- `plugin-sdk/setup` — 安装配置向导 SDK
+- `plugin-sdk/routing` — 模型路由配置 SDK
+- `plugin-sdk/speech` — 语音处理 SDK
+- `plugin-sdk/browser` — 浏览器自动化 SDK
+
+新增顶级导出:
+- `extension-api` — 扩展 API 入口 (用于插件开发)
+
+#### 移除的依赖
+
+以下渠道依赖被移除 (功能整合到核心或不再维护):
+- `grammy` — Telegram Bot 框架 (改用内置实现)
+- `@grammyjs/runner` — Telegram 运行器
+- `@grammyjs/transformer-throttler` — Telegram 限流器
+- `@whiskeysockets/baileys` — WhatsApp Web API (改用 matrix-js-sdk)
+
+#### 新增依赖
+
+核心依赖:
+- `uuid@^13.0.0` — UUID 生成
+- `gaxios@7.1.4` — Google API HTTP 客户端
+- `matrix-js-sdk@41.2.0` — Matrix 协议支持 (替代 WhatsApp)
+- `@anthropic-ai/vertex-sdk@^0.14.4` — Anthropic Vertex AI 支持
+
+#### 依赖版本升级
+
+核心依赖:
+- `ws`: 8.19.0 → 8.20.0
+- `hono`: 4.12.7 → 4.12.9
+- `file-type`: 21.3.2 → 22.0.0
+- `undici`: 7.24.1 → 7.24.6
+- `sqlite-vec`: 0.1.7-alpha.2 → 0.1.7
+
+AI/ML 依赖:
+- `@mariozechner/pi-ai`: 0.58.0 → 0.63.1
+- `@mariozechner/pi-tui`: 0.58.0 → 0.63.1
+- `@mariozechner/pi-agent-core`: 0.58.0 → 0.63.1
+- `@mariozechner/pi-coding-agent`: 0.58.0 → 0.63.1
+- `@modelcontextprotocol/sdk`: 1.27.1 → 1.28.0
+- `@agentclientprotocol/sdk`: 0.16.1 → 0.17.0
+- `@aws-sdk/client-bedrock`: 3.1009.0 → 3.1019.0
+
+#### pnpm 配置变更
+
+新增 `ignoredBuiltDependencies`:
+- `@discordjs/opus` — 跳过构建
+- `koffi` — 跳过构建
+
+新增 `onlyBuiltDependencies`:
+- `@tloncorp/tlon-skill` — 需要构建
+
+#### 中间版本变更 (v2026.3.22 ~ v2026.3.24)
+
+v2026.3.22:
+- Node.js 最低版本从 22.16.0 降低到 22.14.0
+- 大量 plugin-sdk 模块重构
+
+v2026.3.23:
+- 修复版本发布问题
+- 稳定性改进
+
+v2026.3.24:
+- 依赖安全更新
+- 性能优化
+
+#### 升级建议
+
+1. **磁盘空间**: 确保至少 2GB 可用空间
+2. **Node.js**: v22.16.0 完全兼容，无需降级
+3. **配置迁移**: 现有配置向后兼容，无需手动干预
+4. **备份**: 升级前建议执行 `openclaw backup create --only-config`
+
+## [2.0.0] - 2026-03-16
+
+### 重大变更
+- **配置管理菜单重构**: 主菜单采用分组样式，更清晰的导航结构
+  - AI 模型配置：配置 AI 模型和提供商、设置活动模型
+  - 消息渠道：配置消息渠道 (电报/QQ/飞书)
+  - 系统管理：健康检查与状态、查看日志、重启 Gateway
+  - 高级选项：高级配置、重置配置、显示当前配置概览
+- **新增高级配置菜单**: 独立的高级配置入口，包含：
+  - Gateway 端口/绑定地址/运行模式配置
+  - 日志级别设置
+  - ACP Dispatch 开关
+  - 官方完整配置向导入口
+  - 原始 JSON 查看/编辑
+  - 配置备份导出/导入
+
+### 修复
+- **QQ 机器人插件配置名称不匹配** (#XX): OpenClaw v2026.3.13 加强了配置验证，`plugins.allow` 中的插件名称必须与实际安装的插件名完全匹配
+  - 问题：旧版本写入的是 `openclaw-qqbot`，但实际插件名是 `@tencent-connect/openclaw-qqbot`
+  - 影响：配置验证失败导致 Gateway 启动后立即退出，procd 进入 crash loop 保护
+  - 修复：新增 `fix_plugin_config` 函数自动检测并修正不匹配的插件名称
+  - 修复：`configure_qq` 安装插件后调用 `ensure_qqbot_plugin_allowed` 确保正确的插件名写入配置
+  - 修复：`init.d` 服务启动前自动修复配置中的插件名称
+- **安装运行环境报错** (#28): 部分系统缺少 `libstdcpp6` 导致 Node.js 无法运行，安装 pnpm 时卡住
+  - 依赖声明新增 `libstdcpp6`，安装时自动拉取 C++ 标准库
+  - Node.js 验证逻辑改进：检测到运行失败时提示缺失的库并给出修复命令
+- **环境变量路径混乱** (#42): 用户通过 SSH 直接运行 `openclaw` 命令时，CLI 使用默认 `HOME=/root` 导致配置文件和 skills 散落在 `/root/.openclaw/` 而非正确的 `/opt/openclaw/data/.openclaw/`
+  - 新增 `/etc/profile.d/openclaw.sh` 全局环境变量脚本，SSH 登录后自动设置正确的 PATH、OPENCLAW_HOME 等变量
+  - 升级时自动迁移 `/root/.openclaw/` 下的 skills、sessions、openclaw.json 到正确路径
+  - 用户现在可以直接运行 `npm`、`npx`、`openclaw config` 等命令
+
+### 新增
+- **全局环境变量**: `/etc/profile.d/openclaw.sh` 为 SSH 用户提供：
+  - PATH 包含 Node.js 和 OpenClaw bin 目录
+  - OPENCLAW_HOME、OPENCLAW_STATE_DIR、OPENCLAW_CONFIG_PATH 正确指向安装路径
+  - `openclaw` 命令别名（当全局安装时）
+- **查看日志功能**: 主菜单新增「查看日志」选项，显示最近 100 条 OpenClaw 日志
+
+### 变更
+- Makefile 新增 `/etc/profile.d/openclaw.sh` 安装步骤
+- 依赖声明新增 `libstdcpp6`
+- **飞书 Bot 配置流程优化**: 参考 QQ Bot 实现，大幅简化配置步骤
+  - 新增 App ID 格式验证（`cli_xxx` 格式）
+  - 新增 App Secret 长度检查
+  - 使用 OpenClaw CLI 一键配置（`oc_cmd channels add --channel feishu`）
+  - 配置保存后自动验证
+  - 新增详细的事件订阅、权限配置、插件安装指引
+
+### 适配 OpenClaw v2026.3.13
+
+#### 升级说明
+- **Node.js 版本升级**: 从 22.15.1 升级到 22.16.0 (OpenClaw v2026.3.11+ 最低要求)
+- **OpenClaw 版本升级**: 从 v2026.3.8 升级到 v2026.3.13
+
+#### 重要安全修复
+- WebSocket 跨站劫持漏洞修复 (GHSA-5wcw-8jjv-m286)
+- 设备配对安全增强：切换到短期引导令牌 (GHSA-99qw-6mr3-36qr)
+- 命令审批安全加固：Unicode 不可见字符转义、执行检测规范化
+- 多渠道 Webhook 安全增强：飞书/LINE/Zalo 签名验证强化
+
+#### 新功能支持
+- **Fast Mode**: OpenAI/Anthropic 快速响应模式支持
+- **Control UI 重构**: 新版 Dashboard-v2 模块化界面
+- **Ollama 本地向导**: 支持本地或云端+本地混合模式
+- **Kubernetes 部署**: 新增 K8s 部署清单和文档
+- **Docker 时区**: 新增 `OPENCLAW_TZ` 环境变量支持
+
+#### 破坏性变更处理
+- **Cron 主动投递收紧**: 升级后建议运行 `openclaw doctor --fix` 迁移旧版 cron 存储
+- **插件安全策略**: 禁用隐式工作区插件自动加载，需显式信任决策
+- **Node.js 最低版本**: 要求 >= 22.16.0 (已在 openclaw-env 中更新)
+
+#### 配置兼容性
+- 现有配置文件完全兼容，无需手动迁移
+- 已预设 `gateway.controlUi.dangerouslyDisableDeviceAuth=true` 禁用设备认证
+- 已预设 `gateway.controlUi.allowInsecureAuth=true` 允许不安全认证
+
 ## [1.0.15] - 2026-03-13
 
 ### 修复
