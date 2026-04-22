@@ -28,6 +28,7 @@ function index()
 	entry({"admin", "services", appname, "show"}, call("show_menu")).leaf = true
 	entry({"admin", "services", appname, "hide"}, call("hide_menu")).leaf = true
 	entry({"admin", "services", appname, "ip"}, call('check_ip')).leaf = true
+	entry({"admin", "services", appname, "adblock_refresh"}, call('adblock_refresh')).leaf = true
 	local e
 	if uci:get(appname, "@global[0]", "hide_from_luci") ~= "1" then
 		e = entry({"admin", "services", appname}, alias("admin", "services", appname, "settings"), _("Pass Wall"), -1)
@@ -116,6 +117,8 @@ function index()
 
 	--[[geoview]]
 	entry({"admin", "services", appname, "geo_view"}, call("geo_view")).leaf = true
+
+	entry({"admin", "services", appname, "fetch_certsha256"}, call("fetch_certsha256")).leaf = true
 end
 
 local function http_write_json(content)
@@ -294,6 +297,26 @@ end
 
 function clear_log()
 	luci.sys.call("echo '' > /tmp/log/passwall.log")
+end
+
+function adblock_refresh()
+	local icount = 0
+
+	local status = luci.sys.call("/usr/share/passwall/adblock.sh >/dev/null 2>&1")
+	if status == 0 then
+		icount = tonumber(luci.sys.exec("wc -l < /usr/share/passwall/rules/block_host"))
+		if icount>0 then
+			retstring = tostring(math.ceil(icount))
+		else
+			retstring = "-1"
+		end
+	elseif status == 2 then
+		retstring = "0"
+	else
+		retstring = "-1"
+	end
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({ret=retstring})
 end
 
 function check_site(host, port)
@@ -752,7 +775,11 @@ function save_node_list_opt()
 end
 
 function update_rules()
-	local update = http.formvalue("update")
+	local update = http.formvalue("update") or ""
+	if update == "" then
+		http_write_json_error({ message = "missing update target" })
+		return
+	end
 	luci.sys.call("lua /usr/share/passwall/rule_update.lua log '" .. update .. "' > /dev/null 2>&1 &")
 	http_write_json()
 end
@@ -1081,4 +1108,16 @@ function flush_set()
 	if redirect == "1" then
 		http.redirect(api.url("log"))
 	end
+end
+
+function fetch_certsha256()
+	local id = http.formvalue("id") or ""
+	local address = (id ~= "") and uci:get(appname, id, "address") or ""
+	local port = (id ~= "") and uci:get(appname, id, "port") or 0
+	if id == "" or address == "" or not api.datatypes.hostname(address) or port == 0 then
+		http_write_json_error()
+		return
+	end
+	local data = api.fetch_cert_sha256(address, port, 5)
+	http_write_json(data ~= "" and { code = 1, data = data } or { code = 0 })
 end
