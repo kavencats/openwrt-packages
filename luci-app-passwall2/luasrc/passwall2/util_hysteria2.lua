@@ -45,7 +45,7 @@ function gen_config(var)
 	local local_http_port = var["local_http_port"]
 	local local_http_username = var["local_http_username"]
 	local local_http_password = var["local_http_password"]
-	local server_host = var["server_host"] or node.address
+	local server_host = var["server_host"] or (node.address or ""):lower()
 	local server_port = var["server_port"] or node.port
 
 	if api.is_ipv6(server_host) then
@@ -93,7 +93,7 @@ function gen_config(var)
 		tls = {
 			sni = node.tls_serverName,
 			insecure = (node.tls_allowInsecure == "1") and true or false,
-			pinSHA256 = (node.hysteria2_tls_pinSHA256) and node.hysteria2_tls_pinSHA256 or nil,
+			pinSHA256 = (node.tls_pinSHA256) and node.tls_pinSHA256 or nil,
 		},
 		quic = {
 			initStreamReceiveWindow = (node.hysteria2_recv_window) and tonumber(node.hysteria2_recv_window) or nil,

@@ -149,6 +149,8 @@ function gen_outbound(flag, node, tag, proxy_table)
 			tag = tag .. ":" .. remarks
 		end
 
+		node.address = (node.address or ""):lower()
+
 		result = {
 			_id = node_id,
 			_flag = flag,
@@ -173,22 +175,21 @@ function gen_outbound(flag, node, tag, proxy_table)
 				tlsSettings = (node.stream_security == "tls") and {
 					serverName = node.tls_serverName,
 					allowInsecure = (function()
-								if node.tls_CertSha and node.tls_CertSha ~= "" then return nil end
+								if node.tls_pinSHA256 and node.tls_pinSHA256 ~= "" then return nil end
 								if api.compare_versions(os.date("%Y.%m.%d"), "<", "2026.6.1") and node.tls_allowInsecure == "1" then return true end
 							end)(),
 					fingerprint = (node.type == "Xray" and node.utls == "1" and node.fingerprint and node.fingerprint ~= "") and node.fingerprint or nil,
 					pinnedPeerCertSha256 = (function()
 								if api.compare_versions(xray_version, "<", "26.1.31") then return nil end
-								if not node.tls_CertSha then return "" end
-								return node.tls_CertSha
+								if not node.tls_pinSHA256 then return "" end
+								return node.tls_pinSHA256
 							end)(),
 					verifyPeerCertByName = (function()
 								if api.compare_versions(xray_version, "<", "26.1.31") then return nil end
 								if not node.tls_CertByName then return "" end
 								return node.tls_CertByName
 							end)(),
-					echConfigList = (node.ech == "1") and node.ech_config or nil,
-					echForceQuery = (node.ech == "1") and (node.ech_ForceQuery or "full") or nil
+					echConfigList = (node.ech == "1") and node.ech_config or nil
 				} or nil,
 				realitySettings = (node.stream_security == "reality") and {
 					serverName = node.tls_serverName,
@@ -217,7 +218,7 @@ function gen_outbound(flag, node, tag, proxy_table)
 					}
 				} or nil,
 				kcpSettings = (node.transport == "mkcp") and {
-					mtu = 1350,
+					mtu = (node.mkcp_mtu and node.mkcp_mtu ~= "") and tonumber(node.mkcp_mtu) or 1350,
 					tti = 50,
 					uplinkCapacity = 12,
 					downlinkCapacity = 100,
@@ -470,7 +471,6 @@ function gen_outbound(flag, node, tag, proxy_table)
 				finalQuery = true,
 				disableCache = false,
 				serveStale = true,
-				serveExpiredTTL = 30,
 			}
 		end
 
@@ -482,7 +482,7 @@ function gen_config_server(node)
 	local settings = nil
 	local routing = nil
 	local outbounds = {
-		{protocol = "freedom", tag = "direct"}, {protocol = "blackhole", tag = "blocked"}
+		{ protocol = "freedom", tag = "direct", settings = { finalRules = {{ action = "allow" }}}}, { protocol = "blackhole", tag = "blocked" }
 	}
 
 	if node.protocol == "vmess" or node.protocol == "vless" then
@@ -604,6 +604,9 @@ function gen_config_server(node)
 						mark = 255,
 						interface = node.outbound_node_iface
 					}
+				},
+				settings = {
+					finalRules = {{ action = "allow" }}
 				}
 			}
 			sys.call(string.format("mkdir -p %s && touch %s/%s", api.TMP_IFACE_PATH, api.TMP_IFACE_PATH, node.outbound_node_iface))
@@ -674,7 +677,7 @@ function gen_config_server(node)
 						}
 					} or nil,
 					kcpSettings = (node.transport == "mkcp") and {
-						mtu = 1350,
+						mtu = (node.mkcp_mtu and node.mkcp_mtu ~= "") and tonumber(node.mkcp_mtu) or 1350,
 						tti = 50,
 						uplinkCapacity = 12,
 						downlinkCapacity = 100,
@@ -1025,7 +1028,7 @@ function gen_config(var)
 			blc_nodes = _node.balancing_node
 		end
 		local valid_nodes = {}
-		for i = 1, #blc_nodes do
+		for i = 1, #(blc_nodes or {}) do
 			local blc_node_id = blc_nodes[i]
 			local blc_node_tag = "blc-" .. blc_node_id
 			local is_new_blc_node = true
@@ -1260,6 +1263,9 @@ function gen_config(var)
 								mark = 255,
 								interface = node.iface
 							}
+						},
+						settings = {
+							finalRules = {{ action = "allow" }}
 						}
 					}
 					sys.call(string.format("mkdir -p %s && touch %s/%s", api.TMP_IFACE_PATH, api.TMP_IFACE_PATH, node.iface))
@@ -1629,6 +1635,7 @@ function gen_config(var)
 			local domain = {}
 			local nodes_domain_text = sys.exec('uci show passwall2 | grep ".address=" | cut -d "\'" -f 2 | grep "[a-zA-Z]$" | sort -u')
 			string.gsub(nodes_domain_text, '[^' .. "\r\n" .. ']+', function(w)
+				w = (w or ""):lower()
 				table.insert(domain, "full:" .. w)
 			end)
 			if #domain > 0 then
@@ -1639,7 +1646,6 @@ function gen_config(var)
 					finalQuery = true,
 					disableCache = false,
 					serveStale = true,
-					serveExpiredTTL = 30,
 				})
 			end
 		end
@@ -1660,10 +1666,21 @@ function gen_config(var)
 					address = direct_dns_udp_server,
 					port = tonumber(direct_dns_udp_port) or 53,
 					network = "udp",
-					nonIPQuery = "skip",
-					blockTypes = {
-						65
-					}
+					nonIPQuery = (api.compare_versions(xray_version, "<", "26.4.25")) and "skip" or nil, -- Todo is to remove it
+					blockTypes = (api.compare_versions(xray_version, "<", "26.4.25")) and { 65 } or nil,  -- Todo is to remove it
+					rules = (api.compare_versions(xray_version, ">", "26.4.17")) and {
+						{
+							qtype = "1,28",
+							action = "hijack"
+						},
+						{
+							qtype = 65,
+							action = "reject",
+						},
+						{
+							action = "direct"
+						}
+					} or nil
 				},
 				proxySettings = {
 					tag = "direct"
@@ -1674,7 +1691,16 @@ function gen_config(var)
 					address = remote_dns_udp_server,
 					port = tonumber(remote_dns_udp_port) or 53,
 					network = _remote_dns_proto or "tcp",
-					nonIPQuery = "reject"
+					nonIPQuery = (api.compare_versions(xray_version, "<", "26.4.25")) and "reject" or nil, -- Todo is to remove it
+					rules = (api.compare_versions(xray_version, ">", "26.4.17")) and {
+						{
+							qtype = "1,28",
+							action = "hijack"
+						},
+						{
+							action = "reject"
+						}
+					} or nil
 				}
 			}
 			local type_dns = direct_type_dns
@@ -1738,6 +1764,7 @@ function gen_config(var)
 							end
 						end
 						local dns_block_mode = "host"
+						dns_block_mode = ""
 						if dns_block_mode == "host" and dns_outboundTag == "blackhole" then
 							for d_i, d_k in ipairs(value.domain) do
 								dns.hosts[d_k] = "0.0.0.0"
@@ -1922,7 +1949,8 @@ function gen_config(var)
 			protocol = "freedom",
 			tag = "direct",
 			settings = {
-				domainStrategy = (direct_dns_query_strategy and direct_dns_query_strategy ~= "") and direct_dns_query_strategy or "UseIP"
+				domainStrategy = (direct_dns_query_strategy and direct_dns_query_strategy ~= "") and direct_dns_query_strategy or "UseIP",
+				finalRules = {{ action = "allow" }}
 			},
 			streamSettings = {
 				sockopt = {
@@ -2052,7 +2080,7 @@ function gen_proto_config(var)
 	end
 
 	table.insert(outbounds, {
-		protocol = "freedom", tag = "direct", settings = {keep = ""}
+		protocol = "freedom", tag = "direct", settings = {finalRules = {{ action = "allow" }}}, sockopt = {mark = 255}
 	})
 	
 	local config = {
@@ -2150,6 +2178,7 @@ function gen_front_dns_config(var)
 		local node_domain = {}
 		local nodes_domain_text = sys.exec('uci show passwall2 | grep ".address=" | cut -d "\'" -f 2 | grep "[a-zA-Z]$" | sort -u')
 		string.gsub(nodes_domain_text, '[^' .. "\r\n" .. ']+', function(w)
+			w = (w or ""):lower()
 			table.insert(node_domain, "full:" .. w)
 		end)
 		if #node_domain > 0 then
@@ -2162,7 +2191,6 @@ function gen_front_dns_config(var)
 				finalQuery = true,
 				disableCache = false,
 				serveStale = true,
-				serveExpiredTTL = 30,
 			})
 		end
 	end

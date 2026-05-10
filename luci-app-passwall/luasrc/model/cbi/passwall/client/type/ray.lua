@@ -165,28 +165,66 @@ if load_balancing_options then -- [[ Load balancing Start ]]
 
 	-- Fallback Node
 	o = s:option(ListValue, _n("fallback_node"), translate("Fallback Node"))
+	o.group = {"",""}
 	o:value("", translate("Close(Not use)"))
+	o:value("_direct", translate("Direct Connection"))
 	o:depends({ [_n("protocol")] = "_balancing" })
 	o.template = appname .. "/cbi/nodes_listvalue"
-	o.group = {""}
-	local function check_fallback_chain(fb)
-		for k, v in pairs(fallback_list) do
-			if v.fallback == fb then
-				fallback_list[k] = nil
-				check_fallback_chain(v.id)
+	-- 最大 fallback 套娃层数
+	local MAX_FALLBACK_DEPTH = 3
+	-- 检查是否会形成回环
+	local function will_loop(start_id, target_id, depth)
+		depth = depth or 0
+		-- 超过最大深度后停止递归
+		if depth >= MAX_FALLBACK_DEPTH then
+			return false
+		end
+		for _, v in ipairs(fallback_list) do
+			if v.id == target_id then
+				local fb = v.fallback
+				-- 没有 fallback
+				if not fb or fb == "" or fb == "_direct" then
+					return false
+				end
+				-- 检测到回环
+				if fb == start_id then
+					return true
+				end
+				-- 继续递归检查
+				return will_loop(start_id, fb, depth + 1)
 			end
 		end
+		return false
 	end
-	-- 检查fallback链，去掉会形成闭环的balancer节点
-	if is_balancer then
-		check_fallback_chain(arg[1])
+	-- 获取 fallback 链深度
+	local function get_fallback_depth(id, depth)
+		depth = depth or 0
+		if depth >= MAX_FALLBACK_DEPTH then
+			return depth
+		end
+		for _, v in ipairs(fallback_list) do
+			if v.id == id then
+				local fb = v.fallback
+				if not fb or fb == "" or fb == "_direct" then
+					return depth
+				end
+				return get_fallback_depth(fb, depth + 1)
+			end
+		end
+		return depth
 	end
-	for i, v in ipairs(fallback_list) do
-		o:value(v.id, v.remark)
-		o.group[#o.group+1] = (v.group and v.group ~= "") and v.group or translate("default")
+	for _, v in ipairs(fallback_list) do
+		local depth = get_fallback_depth(v.id)
+		-- 超过最大套娃层数后，不允许继续选择 balancer
+		if depth < MAX_FALLBACK_DEPTH
+			and not will_loop(arg[1], v.id)
+		then
+			o:value(v.id, v.remark)
+			o.group[#o.group + 1] = (v.group and v.group ~= "") and v.group or translate("default")
+		end
 	end
 	for k1, v1 in pairs(node_list) do
-		if k1 == "socks_list" or k1 == "normal_list" then
+		if k1 == "socks_list" or k1 == "normal_list" or k1 == "urltest_list" then
 			for i, v in ipairs(v1) do
 				o:value(v.id, v.remark)
 				o.group[#o.group+1] = (v.group and v.group ~= "") and v.group or translate("default")
@@ -376,7 +414,7 @@ if api.compare_versions(os.date("%Y.%m.%d"), "<", "2026.6.1") then
 end
 
 if api.compare_versions(xray_version, ">=", "26.1.31") then
-	o = s:option(Value, _n("tls_CertSha"), translate("TLS Chain Fingerprint (SHA256)"))
+	o = s:option(Value, _n("tls_pinSHA256"), translate("TLS Chain Fingerprint (SHA256)"))
 	o:depends({ [_n("tls")] = true, [_n("reality")] = false })
 	o:depends({ [_n("protocol")] = "hysteria2" })
 	o.description = translate("Once set, connects only when the server’s chain fingerprint matches.") ..
@@ -400,13 +438,6 @@ o:depends({ [_n("ech")] = true })
 o.validate = function(self, value)
 	return api.trim(value:gsub("[\r\n]", ""))
 end
-
-o = s:option(ListValue, _n("ech_ForceQuery"), translate("ECH Query Policy"), translate("Controls the policy used when performing DNS queries for ECH configuration."))
-o.default = "full"
-o:value("none")
-o:value("half")
-o:value("full")
-o:depends({ [_n("ech")] = true })
 
 -- [[ REALITY部分 ]] --
 o = s:option(Value, _n("reality_publicKey"), translate("Public Key"))
@@ -514,6 +545,11 @@ o:depends({ [_n("transport")] = "mkcp" })
 
 o = s:option(Value, _n("mkcp_domain"), translate("Camouflage Domain"), translate("Use it together with the DNS disguised type. You can fill in any domain."))
 o:depends({ [_n("mkcp_guise")] = "dns" })
+
+o = s:option(Value, _n("mkcp_mtu"), translate("KCP MTU"))
+o.datatype = "uinteger"
+o.default = 1350
+o:depends({ [_n("transport")] = "mkcp" })
 
 o = s:option(Value, _n("mkcp_seed"), translate("KCP Seed"))
 o:depends({ [_n("transport")] = "mkcp" })
