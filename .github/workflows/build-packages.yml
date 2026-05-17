@@ -25,11 +25,13 @@ jobs:
           - luci-app-ddns-go
           - luci-theme-argon
           - luci-app-oaf
+          - komd-oaf
           - luci-app-taskplan
           - luci-app-diskman
           - luci-app-smbuser
           - luci-app-tcpdump
           - luci-app-adguardhome
+          - luci-app-filemanager
 
     steps:
       - uses: actions/checkout@v4
