@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr as StdSocketAddr};
+use std::net::SocketAddr as StdSocketAddr;
 use std::time::Instant;
 
 use futures::stream::StreamExt;
@@ -7,13 +7,10 @@ use futures::stream::TryStreamExt;
 use log::{debug, error, info, warn};
 use netlink_packet_core::NetlinkPayload;
 use netlink_packet_route::RouteNetlinkMessage;
-use netlink_packet_route::address::{AddressAttribute, AddressFlags, AddressHeaderFlags, AddressMessage};
 use netlink_packet_route::neighbour::NeighbourMessage;
 use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourState};
 use netlink_packet_route::route::RouteType;
 use rtnetlink::{Error, Handle, new_connection};
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use std::os::unix::io::AsRawFd;
 use tokio::time::{self, Duration};
 
 use clap::Parser;
@@ -21,18 +18,22 @@ use hickory_proto::rr::Name;
 use hickory_proto::rr::TSigner;
 use hickory_proto::rr::rdata::tsig::TsigAlgorithm;
 use netlink_sys::{AsyncSocket, SocketAddr};
+
 mod db;
+mod filter;
+mod iface;
 mod op;
-const RTNLGRP_NEIGH: u32 = 3;
+mod probe;
+mod reconcile;
+mod types;
 
-const DEFAULT_TTL: u32 = 60;
-
-const fn nl_mgrp(group: u32) -> u32 {
-    if group > 31 {
-        panic!("use netlink_sys::Socket::add_membership() for this group");
-    }
-    if group == 0 { 0 } else { 1 << (group - 1) }
-}
+use filter::{if_ipv4_in_private_subnet, if_ipv6_in_private_subnet, ipv6_in_prefix, ipv6_passes_active_prefix, is_gua_ipv6};
+use iface::{get_active_lan_prefixes, register_router_addresses, wait_for_dns_server};
+use probe::{probe_gua_keepalive, probe_registered_neighbours, prune_gua_keepalive, send_icmpv4_echo, send_icmpv6_echo};
+use reconcile::{do_delete_dns, process_new_neigh, prune_ula_for_mac, reconcile_dns};
+use types::{
+    DEFAULT_TTL, RTNLGRP_NEIGH, GuaKeepaliveEntry, Neigh, RegisteredEntry, nl_mgrp,
+};
 
 #[derive(Debug, Parser)]
 #[clap()]
@@ -40,9 +41,9 @@ struct Cli {
     /// Restrict IPv4 neighbours to private subnets only (10/8, 172.16/12, 192.168/16, 127/8)
     #[clap(long)]
     private_subnet_v4: bool,
-    /// Restrict IPv6 neighbours to ULA (fc00::/7) only; without this flag GUA is also included
+    /// Also publish GUA (Global Unicast Address) AAAA records; by default only ULA (fc00::/7) is published
     #[clap(long)]
-    private_subnet_v6: bool,
+    publish_gua: bool,
     /// hickory-dns server address for DNS updates (e.g. "[::1]:5335")
     #[clap(short, long, default_value = "[::1]:5335")]
     dns_server: StdSocketAddr,
@@ -64,110 +65,23 @@ struct Cli {
     /// Network interface to read the router's own addresses from
     #[clap(long, default_value = "br-lan")]
     router_iface: String,
+    /// Additional DNS name to register router addresses under (e.g. "router" → "router.lan")
+    #[clap(long)]
+    router_alias: Option<String>,
+    /// Periodically probe the newest GUA per host to maintain NUD/Wi-Fi reachability (without publishing to DNS)
+    #[clap(long)]
+    keepalive_gua: bool,
+    /// Probe interval in seconds for GUA keepalive (only used with --keepalive-gua)
+    #[clap(long, default_value = "120")]
+    keepalive_gua_interval: u64,
+    /// Maximum number of GUA addresses to keepalive-probe per host
+    #[clap(long, default_value = "2")]
+    keepalive_gua_per_host: usize,
+    /// Maximum number of ULA AAAA records to publish per host (oldest pruned first)
+    #[clap(long, default_value = "2")]
+    max_ula_per_host: usize,
 }
 
-#[derive(Debug)]
-struct Neigh {
-    ifindex: u32,
-    state: NeighbourState,
-    kind: RouteType,
-    inet: NeighbourAddress,
-    mac: String,
-}
-
-/// An IPv6 prefix (address + length) representing an active LAN prefix on the router interface.
-struct LanPrefix {
-    addr: Ipv6Addr,
-    prefix_len: u8,
-}
-
-fn if_ipv6_in_private_subnet(ip: &Ipv6Addr) -> bool {
-    // Check if address is ULA (fc00::/7)
-    // Note: link-local is always filtered earlier by is_link_local_ipv6()
-    (ip.segments()[0] & 0xfe00) == 0xfc00
-}
-
-fn if_ipv4_in_private_subnet(ip: &Ipv4Addr) -> bool {
-    // Check for private network ranges
-    let octets = ip.octets();
-
-    // 10.0.0.0/8
-    if octets[0] == 10 {
-        return true;
-    }
-
-    // 172.16.0.0/12
-    if octets[0] == 172 && (octets[1] >= 16 && octets[1] <= 31) {
-        return true;
-    }
-
-    // 192.168.0.0/16
-    if octets[0] == 192 && octets[1] == 168 {
-        return true;
-    }
-
-    // 127.0.0.0/8 (loopback)
-    if octets[0] == 127 {
-        return true;
-    }
-
-    false
-}
-
-/// Returns true if `addr` falls within the given IPv6 prefix.
-fn ipv6_in_prefix(addr: Ipv6Addr, prefix: &LanPrefix) -> bool {
-    let mask: u128 = if prefix.prefix_len == 0 {
-        0
-    } else if prefix.prefix_len >= 128 {
-        u128::MAX
-    } else {
-        !0u128 << (128 - prefix.prefix_len)
-    };
-    (u128::from(addr) & mask) == (u128::from(prefix.addr) & mask)
-}
-
-async fn process_new_neigh(neigh: &Neigh, updater: &db::DnsUpdater, leases: &HashMap<String, String>) -> bool {
-    let Some(hostname) = leases.get(&neigh.mac) else {
-        debug!("no lease for mac {}, skipping DNS update", neigh.mac);
-        return true;
-    };
-    let result = match &neigh.inet {
-        NeighbourAddress::Inet6(addr) => updater.upsert_aaaa(hostname, *addr, DEFAULT_TTL).await,
-        NeighbourAddress::Inet(addr) => updater.upsert_a(hostname, *addr, DEFAULT_TTL).await,
-        _ => return true,
-    };
-    match result {
-        Ok(()) => {
-            info!("DNS update: added {} -> {:?}", hostname, neigh.inet);
-            true
-        }
-        Err(e) => {
-            error!("DNS update failed for {}: {}", hostname, e);
-            false
-        }
-    }
-}
-
-async fn process_del_neigh(neigh: &Neigh, updater: &db::DnsUpdater, leases: &HashMap<String, String>) -> bool {
-    let Some(hostname) = leases.get(&neigh.mac) else {
-        return true;
-    };
-    let result = match &neigh.inet {
-        NeighbourAddress::Inet6(addr) => updater.delete_aaaa(hostname, *addr).await,
-        NeighbourAddress::Inet(addr) => updater.delete_a(hostname, *addr).await,
-        _ => return true,
-    };
-    match result {
-        Ok(()) => {
-            info!("DNS update: removed {} -> {:?}", hostname, neigh.inet);
-            true
-        }
-        Err(e) => {
-            error!("DNS delete failed for {}: {}", hostname, e);
-            false
-        }
-    }
-}
 
 fn should_skip_route_type(route_type: RouteType) -> bool {
     matches!(route_type, RouteType::Multicast | RouteType::Broadcast | RouteType::Local)
@@ -182,7 +96,7 @@ fn is_failed_state(state: NeighbourState) -> bool {
     matches!(state, NeighbourState::Failed)
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), ()> {
     let args = Cli::parse();
 
@@ -199,7 +113,11 @@ async fn main() -> Result<(), ()> {
         .init();
 
     let private_subnet_v4 = args.private_subnet_v4;
-    let private_subnet_v6 = args.private_subnet_v6;
+    let private_subnet_v6 = !args.publish_gua;
+    let keepalive_gua = args.keepalive_gua;
+    let keepalive_gua_interval = args.keepalive_gua_interval;
+    let keepalive_gua_per_host = args.keepalive_gua_per_host;
+    let max_ula_per_host = args.max_ula_per_host;
     let zone = Name::from_ascii(&args.zone).expect("invalid zone name");
 
     let key_data = std::fs::read(&args.key_file)
@@ -213,7 +131,14 @@ async fn main() -> Result<(), ()> {
     // Wait for the DNS server to become available before sending any updates.
     wait_for_dns_server(args.dns_server).await;
 
-    let (connection, handle, _) = new_connection().unwrap();
+    let (mut connection, handle, mut messages) = new_connection().unwrap();
+    // Subscribe to neighbour events on the same connection used for queries.
+    // This avoids a second netlink socket and spawned task.
+    connection
+        .socket_mut()
+        .socket_mut()
+        .bind(&SocketAddr::new(0, nl_mgrp(RTNLGRP_NEIGH)))
+        .expect("Failed to bind netlink multicast group");
     tokio::spawn(connection);
 
     // Register router's own addresses in DNS
@@ -224,26 +149,40 @@ async fn main() -> Result<(), ()> {
     if router_hostname.is_empty() {
         warn!("could not read router hostname from /proc/sys/kernel/hostname");
     } else {
+        let router_alias = args.router_alias.as_deref().filter(|a| *a != router_hostname);
         register_router_addresses(
             handle.clone(),
             &args.router_iface,
             &router_hostname,
+            router_alias,
             &updater,
             private_subnet_v6,
         )
         .await;
     }
 
-    // Load DHCP leases (mac -> hostname) from ubus
-    let mut leases = op::get_lease().unwrap_or_default();
+    // Load DHCP leases (mac -> hostname) from ubus.
+    // Use spawn_blocking: op::get_lease() makes a synchronous ubus call.
+    let mut leases: HashMap<String, String> = tokio::task::spawn_blocking(|| {
+        op::get_lease().unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     info!("loaded {} DHCP leases", leases.len());
 
-    // State cache: tracks (mac, ip_string) -> (last confirmed time, ifindex)
-    let mut registered: HashMap<(String, String), (Instant, u32)> = HashMap::new();
+    // State cache: tracks (mac, ip_string) -> registered entry (hostname, last confirmed time, ifindex)
+    let mut registered: HashMap<(String, String), RegisteredEntry> = HashMap::new();
+
+    // GUA keepalive: tracks GUA addresses per MAC for periodic probing (not published to DNS).
+    // Key = MAC address, value = list of GUA entries for that host.
+    let mut gua_keepalive: HashMap<String, Vec<GuaKeepaliveEntry>> = HashMap::new();
 
     // Get active LAN prefixes to filter out neighbours from expired/old prefixes.
     // If prefix detection fails we log a warning but continue without filtering.
-    let active_prefixes = get_active_lan_prefixes(handle.clone(), &args.router_iface, private_subnet_v6).await;
+    // When keepalive_gua is enabled, also include GUA prefixes so we can filter
+    // keepalive targets against active prefixes (pass private_subnet_v6=false).
+    let prefix_filter_v6 = if keepalive_gua { false } else { private_subnet_v6 };
+    let active_prefixes = get_active_lan_prefixes(handle.clone(), &args.router_iface, prefix_filter_v6).await;
     if active_prefixes.is_empty() {
         warn!("no active IPv6 prefixes found on {}, neighbour prefix-filtering disabled", args.router_iface);
     } else {
@@ -259,12 +198,13 @@ async fn main() -> Result<(), ()> {
 
     // Dump existing neighbours:
     // - Skip entries whose IP is not within any active LAN prefix (old-prefix residuals).
+    // - Route GUA addresses to keepalive map (if enabled) instead of DNS.
     // - Register REACHABLE entries immediately.
     // - Send a probe to STALE/DELAY/PROBE entries; the event loop will register them
     //   once the kernel confirms they are REACHABLE.
     // - Ignore FAILED and other states.
     debug!("dumping neighbours");
-    if let Ok(neighbours) = dump_neighbours(handle.clone(), private_subnet_v4, private_subnet_v6).await {
+    if let Ok(neighbours) = dump_neighbours(handle.clone(), private_subnet_v4).await {
         for neigh in &neighbours {
             debug!("{:?}", neigh);
             if should_skip_neigh(neigh) {
@@ -277,13 +217,72 @@ async fn main() -> Result<(), ()> {
                     continue;
                 }
             }
+
+            // Route GUA addresses to keepalive map instead of DNS.
+            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                if is_gua_ipv6(addr) {
+                    if keepalive_gua {
+                        if neigh.state == NeighbourState::Reachable {
+                            if let Some(hostname) = leases.get(&neigh.mac) {
+                                let entries = gua_keepalive.entry(neigh.mac.clone()).or_default();
+                                if !entries.iter().any(|e| e.addr == *addr) {
+                                    let now = Instant::now();
+                                    entries.push(GuaKeepaliveEntry {
+                                        hostname: hostname.clone(),
+                                        addr: *addr,
+                                        ifindex: neigh.ifindex,
+                                        first_seen: now,
+                                        last_confirmed: now,
+                                    });
+                                    debug!("init dump: GUA keepalive tracked {} -> {}", hostname, addr);
+                                }
+                            }
+                        } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe) {
+                            // Probe stale GUA so the kernel NUD state machine can confirm
+                            // reachability; the event loop will add it to gua_keepalive on REACHABLE.
+                            match send_icmpv6_echo(*addr, neigh.ifindex) {
+                                Ok(()) => debug!("init dump: probing stale GUA {}", addr),
+                                Err(e) => debug!("init GUA probe failed for {}: {}", addr, e),
+                            }
+                        }
+                    }
+                    // GUA addresses are never published to DNS (unless --publish-gua)
+                    if private_subnet_v6 {
+                        continue;
+                    }
+                }
+            }
+
             let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
             match neigh.state {
                 NeighbourState::Reachable => {
                     // Confirmed online — register in DNS immediately.
                     if !registered.contains_key(&key) {
-                        if process_new_neigh(neigh, &updater, &leases).await {
-                            registered.insert(key, (Instant::now(), neigh.ifindex));
+                        if let Some(hostname) = leases.get(&neigh.mac) {
+                            // Enforce per-host ULA limit before adding a new one.
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                if if_ipv6_in_private_subnet(addr) {
+                                    prune_ula_for_mac(&neigh.mac, max_ula_per_host, &mut registered, &updater).await;
+                                }
+                            }
+                            let result = match &neigh.inet {
+                                NeighbourAddress::Inet6(addr) => updater.upsert_aaaa(hostname, *addr, DEFAULT_TTL).await,
+                                NeighbourAddress::Inet(addr) => updater.upsert_a(hostname, *addr, DEFAULT_TTL).await,
+                                _ => Ok(()),
+                            };
+                            match result {
+                                Ok(()) => {
+                                    info!("DNS update: added {} -> {:?}", hostname, neigh.inet);
+                                    registered.insert(key, RegisteredEntry {
+                                        hostname: hostname.clone(),
+                                        last_confirmed: Instant::now(),
+                                        ifindex: neigh.ifindex,
+                                    });
+                                }
+                                Err(e) => error!("DNS update failed for {}: {}", hostname, e),
+                            }
+                        } else {
+                            debug!("no lease for mac {}, skipping DNS update", neigh.mac);
                         }
                     }
                 }
@@ -313,18 +312,7 @@ async fn main() -> Result<(), ()> {
         }
     }
 
-    let (mut conn, mut _handle, mut messages) =
-        new_connection().map_err(|e| format!("{e}")).unwrap();
-
-    let groups = nl_mgrp(RTNLGRP_NEIGH);
-
-    let addr = SocketAddr::new(0, groups);
-    conn.socket_mut()
-        .socket_mut()
-        .bind(&addr)
-        .expect("Failed to bind");
-
-    tokio::spawn(conn);
+    // (netlink event socket already set up above — reuse the same connection)
 
     // Start periodic probing task
     let probe_interval = args.probe_interval;
@@ -336,7 +324,16 @@ async fn main() -> Result<(), ()> {
     };
     probe_timer.tick().await; // consume the immediate first tick
 
-    let mut event_count: u64 = 0;
+    // GUA keepalive timer (separate cadence from DNS probe timer)
+    let mut gua_keepalive_timer = if keepalive_gua && keepalive_gua_interval > 0 {
+        time::interval(Duration::from_secs(keepalive_gua_interval))
+    } else {
+        time::interval(Duration::from_secs(u64::MAX / 2))
+    };
+    gua_keepalive_timer.tick().await; // consume the immediate first tick
+
+    let mut lease_refresh_timer = time::interval(Duration::from_secs(60));
+    lease_refresh_timer.tick().await; // consume the immediate first tick
 
     loop {
         tokio::select! {
@@ -345,68 +342,148 @@ async fn main() -> Result<(), ()> {
                     break;
                 };
 
-                // Refresh leases periodically (every 50 events)
-                event_count += 1;
-                if event_count % 50 == 0 {
-                    if let Ok(new_leases) = op::get_lease() {
-                        leases = new_leases;
-                        debug!("refreshed {} DHCP leases", leases.len());
-                    }
-                }
-
                 let payload = message.payload;
                 if let NetlinkPayload::InnerMessage(msg) = payload {
                     match msg {
                         RouteNetlinkMessage::NewNeighbour(new_neigh) => {
-                            let Some(neigh) = parse_neighbour_message(new_neigh, private_subnet_v4, private_subnet_v6) else {
+                            let Some(neigh) = parse_neighbour_message(new_neigh, private_subnet_v4) else {
                                 continue;
                             };
                             if should_skip_neigh(&neigh) {
                                 continue;
                             }
-                            let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
+                            // Drop IPv6 events for addresses not in any active LAN prefix.
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                if !ipv6_passes_active_prefix(*addr, &active_prefixes) {
+                                    debug!("event: skipping {} — not in any active LAN prefix", addr);
+                                    let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
+                                    if let Some(entry) = registered.remove(&key) {
+                                        do_delete_dns(&entry.hostname, &neigh.inet, &updater).await;
+                                    }
+                                    // Also remove from GUA keepalive if present
+                                    if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
+                                        entries.retain(|e| e.addr != *addr);
+                                    }
+                                    continue;
+                                }
+                            }
 
+                            // Route GUA addresses to keepalive map instead of DNS.
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                if is_gua_ipv6(addr) && private_subnet_v6 {
+                                    // GUA not published to DNS — handle keepalive tracking only
+                                    if keepalive_gua {
+                                        if is_failed_state(neigh.state) {
+                                            if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
+                                                entries.retain(|e| e.addr != *addr);
+                                                debug!("GUA keepalive: removed failed {} for mac {}", addr, neigh.mac);
+                                            }
+                                        } else if neigh.state == NeighbourState::Reachable {
+                                            if let Some(hostname) = leases.get(&neigh.mac) {
+                                                let entries = gua_keepalive.entry(neigh.mac.clone()).or_default();
+                                                if let Some(e) = entries.iter_mut().find(|e| e.addr == *addr) {
+                                                    e.last_confirmed = Instant::now();
+                                                    e.ifindex = neigh.ifindex;
+                                                } else {
+                                                    let now = Instant::now();
+                                                    entries.push(GuaKeepaliveEntry {
+                                                        hostname: hostname.clone(),
+                                                        addr: *addr,
+                                                        ifindex: neigh.ifindex,
+                                                        first_seen: now,
+                                                        last_confirmed: now,
+                                                    });
+                                                    debug!("GUA keepalive: tracking {} -> {}", hostname, addr);
+                                                }
+                                            }
+                                        } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe) {
+                                            // Update ifindex only
+                                            if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
+                                                if let Some(e) = entries.iter_mut().find(|e| e.addr == *addr) {
+                                                    e.ifindex = neigh.ifindex;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+
+                            let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
                             if is_failed_state(neigh.state) {
                                 // Neighbour confirmed unreachable — remove DNS record
-                                if registered.remove(&key).is_some() {
+                                if let Some(entry) = registered.remove(&key) {
                                     debug!("Neighbour failed: {:?}", neigh);
-                                    if !process_del_neigh(&neigh, &updater, &leases).await {
+                                    if !do_delete_dns(&entry.hostname, &neigh.inet, &updater).await {
                                         // DNS delete failed, put back so we retry
-                                        registered.insert(key, (Instant::now(), neigh.ifindex));
+                                        registered.insert(key, entry);
                                     }
                                 }
                             } else if neigh.state == NeighbourState::Reachable {
-                                if registered.contains_key(&key) {
-                                    // Already registered, just update timestamp
-                                    registered.insert(key, (Instant::now(), neigh.ifindex));
+                                if let Some(entry) = registered.get_mut(&key) {
+                                    // Already registered, just update timestamp and ifindex
+                                    entry.last_confirmed = Instant::now();
+                                    entry.ifindex = neigh.ifindex;
                                 } else {
                                     // New reachable neighbour — register in DNS
                                     debug!("New neighbour: {:?}", neigh);
-                                    if process_new_neigh(&neigh, &updater, &leases).await {
-                                        registered.insert(key, (Instant::now(), neigh.ifindex));
+                                    if let Some(hostname) = leases.get(&neigh.mac) {
+                                        // Enforce per-host ULA limit before adding.
+                                        if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                            if if_ipv6_in_private_subnet(addr) {
+                                                prune_ula_for_mac(&neigh.mac, max_ula_per_host, &mut registered, &updater).await;
+                                            }
+                                        }
+                                        if process_new_neigh(&neigh, &updater, &leases, private_subnet_v6).await {
+                                            registered.insert(key, RegisteredEntry {
+                                                hostname: hostname.clone(),
+                                                last_confirmed: Instant::now(),
+                                                ifindex: neigh.ifindex,
+                                            });
+                                        }
+                                    } else {
+                                        debug!("no lease for mac {}, skipping DNS update", neigh.mac);
                                     }
                                 }
                             } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe) {
-                                // Uncertain state: keep existing registrations alive but do
-                                // not create new DNS records without REACHABLE confirmation.
-                                if registered.contains_key(&key) {
-                                    registered.insert(key, (Instant::now(), neigh.ifindex));
+                                // Uncertain state: update ifindex only so the next probe uses
+                                // the right interface, but do NOT refresh last_confirmed —
+                                // STALE/DELAY/PROBE is not confirmed reachable and refreshing
+                                // the timestamp would suppress the periodic probe.
+                                if let Some(entry) = registered.get_mut(&key) {
+                                    entry.ifindex = neigh.ifindex;
                                 }
                             }
                         }
                         RouteNetlinkMessage::DelNeighbour(del_neigh) => {
-                            let Some(neigh) = parse_neighbour_message(del_neigh, private_subnet_v4, private_subnet_v6) else {
+                            let Some(neigh) = parse_neighbour_message(del_neigh, private_subnet_v4) else {
                                 continue;
                             };
                             if should_skip_neigh(&neigh) {
                                 continue;
                             }
+                            // Remove from GUA keepalive if applicable
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                if is_gua_ipv6(addr) && keepalive_gua {
+                                    if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
+                                        entries.retain(|e| e.addr != *addr);
+                                        debug!("GUA keepalive: removed deleted {} for mac {}", addr, neigh.mac);
+                                    }
+                                    if private_subnet_v6 {
+                                        continue;
+                                    }
+                                }
+                            }
                             let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
-                            registered.remove(&key);
+                            let stored_hostname = registered.remove(&key).map(|e| e.hostname);
                             debug!("Del neighbour: {:?}", neigh);
-                            // Always attempt DNS deletion even if not in registered map,
-                            // to clean up records that survived a program restart.
-                            process_del_neigh(&neigh, &updater, &leases).await;
+                            // Use stored hostname if available, fall back to leases for records
+                            // that survived a program restart (not in registered).
+                            let hostname_opt = stored_hostname
+                                .or_else(|| leases.get(&neigh.mac).cloned());
+                            if let Some(ref hostname) = hostname_opt {
+                                do_delete_dns(hostname, &neigh.inet, &updater).await;
+                            }
                         }
                         _ => {}
                     }
@@ -427,196 +504,28 @@ async fn main() -> Result<(), ()> {
                 )
                 .await;
             }
-        }
-    }
-    Ok(())
-}
-
-/// Reconcile the in-memory `registered` map against the live DNS zone obtained via AXFR.
-///
-/// Two corrections are made on each call:
-/// 1. **DNS orphans** – records present in DNS but absent from `registered`.
-///    These are either stale leftovers from a previous run or records from a prefix that
-///    is no longer active.  Records that fail prefix/subnet filtering are deleted from DNS
-///    immediately; records that pass filtering are probed with ICMP so the kernel NUD
-///    state machine can confirm reachability and re-populate `registered` via the event loop.
-/// 2. **Registered orphans** – entries in `registered` that are missing from DNS (e.g.
-///    because hickory-dns restarted and lost its in-memory state).  These are re-pushed
-///    via DNS UPDATE so the zone stays consistent.
-async fn reconcile_dns(
-    updater: &db::DnsUpdater,
-    registered: &mut HashMap<(String, String), (Instant, u32)>,
-    leases: &HashMap<String, String>,
-    active_prefixes: &[LanPrefix],
-    private_subnet_v4: bool,
-    private_subnet_v6: bool,
-) {
-    use std::collections::{HashMap as Map, HashSet};
-    use std::net::IpAddr;
-
-    let dns_records = match updater.axfr_records().await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("AXFR reconciliation failed: {}", e);
-            return;
-        }
-    };
-
-    // Only consider records whose hostname appears in the lease table; this avoids
-    // accidentally touching manually-added records or the router's own addresses.
-    let lease_hostnames: HashSet<&str> = leases.values().map(String::as_str).collect();
-
-    // Map: ip_string -> hostname, for DNS records that pass all filters.
-    // Records that fail filtering are deleted from DNS here.
-    let mut dns_ips: Map<String, String> = Map::new();
-
-    for (hostname, ip) in &dns_records {
-        if !lease_hostnames.contains(hostname.as_str()) {
-            continue;
-        }
-        let passes = match ip {
-            IpAddr::V6(addr) => {
-                let subnet_ok = !private_subnet_v6 || if_ipv6_in_private_subnet(addr);
-                let prefix_ok = active_prefixes.is_empty()
-                    || active_prefixes.iter().any(|p| ipv6_in_prefix(*addr, p));
-                subnet_ok && prefix_ok
+            _ = gua_keepalive_timer.tick() => {
+                if !keepalive_gua || keepalive_gua_interval == 0 {
+                    continue;
+                }
+                probe_gua_keepalive(&gua_keepalive, keepalive_gua_per_host);
+                prune_gua_keepalive(&mut gua_keepalive, keepalive_gua_interval, keepalive_gua_per_host);
             }
-            IpAddr::V4(addr) => !private_subnet_v4 || if_ipv4_in_private_subnet(addr),
-        };
-
-        if passes {
-            dns_ips.insert(ip.to_string(), hostname.clone());
-        } else {
-            // Stale record (wrong prefix / subnet) — remove from DNS.
-            let result = match ip {
-                IpAddr::V6(addr) => updater.delete_aaaa(hostname, *addr).await,
-                IpAddr::V4(addr) => updater.delete_a(hostname, *addr).await,
-            };
-            match result {
-                Ok(()) => info!("reconcile: deleted stale DNS {} -> {}", hostname, ip),
-                Err(e) => warn!("reconcile: failed to delete stale DNS {} {}: {}", hostname, ip, e),
-            }
-        }
-    }
-
-    // Registered ip set for quick lookup.
-    let registered_ips: HashSet<&str> =
-        registered.keys().map(|(_, ip)| ip.as_str()).collect();
-
-    // --- DNS orphans (in DNS but not in registered) ---
-    // Probe with ifindex=0 so the kernel routes via the default LAN route.
-    // If the host is alive the resulting REACHABLE event will re-populate `registered`.
-    // If gone, the record's TTL (60 s) will expire and it won't be renewed.
-    for (ip_str, hostname) in &dns_ips {
-        if registered_ips.contains(ip_str.as_str()) {
-            continue;
-        }
-        info!("reconcile: DNS orphan {} -> {}, probing", hostname, ip_str);
-        match ip_str.parse::<IpAddr>() {
-            Ok(IpAddr::V6(addr)) => {
-                if let Err(e) = send_icmpv6_echo(addr, 0) {
-                    debug!("reconcile: probe failed for {}: {}", addr, e);
+            _ = lease_refresh_timer.tick() => {
+                match tokio::task::spawn_blocking(|| op::get_lease().map_err(|e| e.to_string())).await {
+                    Ok(Ok(new_leases)) => {
+                        leases = new_leases;
+                        debug!("refreshed {} DHCP leases", leases.len());
+                    }
+                    Ok(Err(e)) => warn!("failed to refresh DHCP leases from ubus: {}", e),
+                    Err(e) => warn!("DHCP lease refresh task panicked: {}", e),
                 }
             }
-            Ok(IpAddr::V4(addr)) => {
-                let _ = send_icmpv4_echo(addr, 0);
-            }
-            _ => {}
         }
     }
-
-    // --- Registered orphans (in registered but not in DNS) ---
-    // hickory-dns may have restarted and lost its journal; re-push the record.
-    for ((mac, ip_str), (last_confirmed, _)) in registered.iter_mut() {
-        if dns_ips.contains_key(ip_str.as_str()) {
-            continue;
-        }
-        let Some(hostname) = leases.get(mac) else { continue };
-        debug!("reconcile: registered orphan {} -> {}, re-pushing", hostname, ip_str);
-        let result = match ip_str.parse::<IpAddr>() {
-            Ok(IpAddr::V6(addr)) => updater.upsert_aaaa(hostname, addr, DEFAULT_TTL).await,
-            Ok(IpAddr::V4(addr)) => updater.upsert_a(hostname, addr, DEFAULT_TTL).await,
-            _ => continue,
-        };
-        match result {
-            Ok(()) => {
-                info!("reconcile: re-pushed {} -> {}", hostname, ip_str);
-                *last_confirmed = Instant::now();
-            }
-            Err(e) => warn!("reconcile: failed to re-push {} {}: {}", hostname, ip_str, e),
-        }
-    }
-}
-
-/// Send ICMPv6 Echo Request / ICMPv4 Echo Request to all registered neighbours.
-/// This forces the kernel NUD state machine to verify reachability, generating
-/// NewNeighbour events with the resulting state (Reachable or Failed).
-async fn probe_registered_neighbours(registered: &HashMap<(String, String), (Instant, u32)>) {
-    let now = Instant::now();
-    for ((_, ip_str), (last_confirmed, ifindex)) in registered.iter() {
-        // Only probe entries not confirmed recently (older than 30s)
-        if now.duration_since(*last_confirmed) < Duration::from_secs(30) {
-            continue;
-        }
-        if let Ok(addr) = ip_str.parse::<Ipv6Addr>() {
-            if let Err(e) = send_icmpv6_echo(addr, *ifindex) {
-                debug!("probe failed for {}: {}", ip_str, e);
-            }
-        } else if let Ok(addr) = ip_str.parse::<Ipv4Addr>() {
-            if let Err(e) = send_icmpv4_echo(addr, *ifindex) {
-                debug!("probe failed for {}: {}", ip_str, e);
-            }
-        }
-    }
-}
-
-fn send_icmpv6_echo(addr: Ipv6Addr, ifindex: u32) -> std::io::Result<()> {
-    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::ICMPV6))?;
-    socket.set_nonblocking(true)?;
-    // Bind outgoing packet to the specific interface via IPV6_UNICAST_IF so the
-    // kernel NUD state machine updates the correct neighbour entry.
-    if ifindex != 0 {
-        unsafe {
-            let idx = ifindex as libc::c_int;
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                libc::IPV6_UNICAST_IF,
-                &idx as *const libc::c_int as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
-        }
-    }
-    // ICMPv6 Echo Request: type=128, code=0, checksum=0 (kernel computes), id=0, seq=1
-    let packet: [u8; 8] = [128, 0, 0, 0, 0, 0, 0, 1];
-    let dest = SockAddr::from(std::net::SocketAddrV6::new(addr, 0, 0, 0));
-    let _ = socket.send_to(&packet, &dest);
     Ok(())
 }
 
-fn send_icmpv4_echo(addr: Ipv4Addr, ifindex: u32) -> std::io::Result<()> {
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4))?;
-    socket.set_nonblocking(true)?;
-    // Bind outgoing packet to the specific interface via IP_UNICAST_IF.
-    if ifindex != 0 {
-        unsafe {
-            let idx = ifindex as libc::c_int;
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::IPPROTO_IP,
-                libc::IP_UNICAST_IF,
-                &idx as *const libc::c_int as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
-        }
-    }
-    // ICMPv4 Echo Request: type=8, code=0, checksum (simple for 8 bytes), id=0, seq=1
-    // Checksum for [08,00,00,00,00,00,00,01]: ~(0x0800 + 0x0001) = 0xf7fe
-    let packet: [u8; 8] = [8, 0, 0xf7, 0xfe, 0, 0, 0, 1];
-    let dest = SockAddr::from(std::net::SocketAddrV4::new(addr, 0));
-    let _ = socket.send_to(&packet, &dest);
-    Ok(())
-}
 
 fn format_mac(mac: Vec<u8>) -> String {
     let mut mac_str = String::new();
@@ -639,7 +548,7 @@ fn is_link_local_ipv6(addr: &NeighbourAddress) -> bool {
     matches!(addr, NeighbourAddress::Inet6(ip) if (ip.segments()[0] & 0xffc0) == 0xfe80)
 }
 
-fn parse_neighbour_message(neigh: NeighbourMessage, private_subnet_v4: bool, private_subnet_v6: bool) -> Option<Neigh> {
+fn parse_neighbour_message(neigh: NeighbourMessage, private_subnet_v4: bool) -> Option<Neigh> {
     let state = neigh.header.state;
     // Filter out static and incomplete entries
     if matches!(state, NeighbourState::Permanent | NeighbourState::Noarp) {
@@ -653,23 +562,16 @@ fn parse_neighbour_message(neigh: NeighbourMessage, private_subnet_v4: bool, pri
     if is_link_local_ipv6(&addr) {
         return None;
     }
-    match addr {
-        NeighbourAddress::Inet(addr) => {
-            if private_subnet_v4 && !if_ipv4_in_private_subnet(&addr) {
-                return None;
-            }
+    // IPv4 private-subnet filter stays here (no keepalive concept for IPv4 GUA)
+    if let NeighbourAddress::Inet(ipv4) = &addr {
+        if private_subnet_v4 && !if_ipv4_in_private_subnet(ipv4) {
+            return None;
         }
-        NeighbourAddress::Inet6(addr) => {
-            if private_subnet_v6 && !if_ipv6_in_private_subnet(&addr) {
-                return None;
-            }
-        }
-        _ => {}
-    };
+    }
     let kind = neigh.header.kind;
     let ifindex = neigh.header.ifindex;
     let mac = neigh.attributes.iter().find_map(|attr| match attr {
-        NeighbourAttribute::LinkLocalAddress(mac) => Some(mac.to_owned()),
+        NeighbourAttribute::LinkLayerAddress(mac) => Some(mac.to_owned()),
         _ => None,
     })?;
     let mac_str = format_mac(mac);
@@ -686,11 +588,11 @@ fn parse_neighbour_message(neigh: NeighbourMessage, private_subnet_v4: bool, pri
     })
 }
 
-async fn dump_neighbours(handle: Handle, private_subnet_v4: bool, private_subnet_v6: bool) -> Result<Vec<Neigh>, Error> {
+async fn dump_neighbours(handle: Handle, private_subnet_v4: bool) -> Result<Vec<Neigh>, Error> {
     let mut neighbours = handle.neighbours().get().execute();
     let mut vec: Vec<Neigh> = Vec::new();
     while let Some(route) = neighbours.try_next().await? {
-        if let Some(neigh) = parse_neighbour_message(route, private_subnet_v4, private_subnet_v6) {
+        if let Some(neigh) = parse_neighbour_message(route, private_subnet_v4) {
             if !should_skip_neigh(&neigh) {
                 vec.push(neigh);
             }
@@ -699,128 +601,3 @@ async fn dump_neighbours(handle: Handle, private_subnet_v4: bool, private_subnet
     Ok(vec)
 }
 
-/// Check whether an address message is deprecated (preferred lifetime expired).
-fn is_addr_deprecated(msg: &AddressMessage) -> bool {
-    if msg.header.flags.contains(AddressHeaderFlags::Deprecated) {
-        return true;
-    }
-    for attr in &msg.attributes {
-        match attr {
-            AddressAttribute::Flags(f) if f.contains(AddressFlags::Deprecated) => return true,
-            AddressAttribute::CacheInfo(ci) if ci.ifa_preferred == 0 => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Enumerate non-link-local IPv6 prefixes currently assigned to `iface`.
-/// Used during startup to filter out neighbour entries from expired/old prefixes.
-async fn get_active_lan_prefixes(handle: Handle, iface: &str, private_subnet_v6: bool) -> Vec<LanPrefix> {
-    let mut links = handle.link().get().match_name(iface.to_owned()).execute();
-    let link = match links.try_next().await {
-        Ok(Some(l)) => l,
-        _ => return vec![],
-    };
-    let ifindex = link.header.index;
-    let mut addresses = handle.address().get().set_link_index_filter(ifindex).execute();
-    let mut prefixes = Vec::new();
-    while let Ok(Some(msg)) = addresses.try_next().await {
-        let prefix_len = msg.header.prefix_len;
-        // Skip deprecated addresses; they are no longer used for new connections
-        // and should not be treated as active LAN prefixes.
-        if is_addr_deprecated(&msg) {
-            continue;
-        }
-        for attr in &msg.attributes {
-            if let AddressAttribute::Address(IpAddr::V6(addr)) = attr {
-                // Skip link-local
-                if (addr.segments()[0] & 0xffc0) == 0xfe80 {
-                    continue;
-                }
-                let is_ula = (addr.segments()[0] & 0xfe00) == 0xfc00;
-                if private_subnet_v6 && !is_ula {
-                    continue;
-                }
-                prefixes.push(LanPrefix { addr: *addr, prefix_len });
-            }
-        }
-    }
-    prefixes
-}
-
-/// Enumerate addresses on `iface`, register A/AAAA records for the router itself.
-async fn register_router_addresses(
-    handle: Handle,
-    iface: &str,
-    hostname: &str,
-    updater: &db::DnsUpdater,
-    private_subnet_v6: bool,
-) {
-    let mut links = handle.link().get().match_name(iface.to_owned()).execute();
-    let link = match links.try_next().await {
-        Ok(Some(l)) => l,
-        Ok(None) => {
-            warn!("interface {} not found, skipping router address registration", iface);
-            return;
-        }
-        Err(e) => {
-            warn!("failed to find interface {}: {}", iface, e);
-            return;
-        }
-    };
-    let ifindex = link.header.index;
-    let mut addresses = handle.address().get().set_link_index_filter(ifindex).execute();
-    while let Ok(Some(msg)) = addresses.try_next().await {
-        if is_addr_deprecated(&msg) {
-            continue;
-        }
-        for attr in &msg.attributes {
-            let ip = match attr {
-                AddressAttribute::Address(ip) => ip,
-                _ => continue,
-            };
-            match ip {
-                IpAddr::V6(addr) => {
-                    // Always skip link-local
-                    if (addr.segments()[0] & 0xffc0) == 0xfe80 {
-                        continue;
-                    }
-                    // Restrict to ULA only when private_subnet_v6 is set
-                    let is_ula = (addr.segments()[0] & 0xfe00) == 0xfc00;
-                    if private_subnet_v6 && !is_ula {
-                        continue;
-                    }
-                    match updater.upsert_aaaa(hostname, *addr, DEFAULT_TTL).await {
-                        Ok(()) => info!("registered router {} AAAA {}", hostname, addr),
-                        Err(e) => warn!("failed to register router AAAA {} for {}: {}", addr, hostname, e),
-                    }
-                }
-                IpAddr::V4(addr) => {
-                    match updater.upsert_a(hostname, *addr, DEFAULT_TTL).await {
-                        Ok(()) => info!("registered router {} A {}", hostname, addr),
-                        Err(e) => warn!("failed to register router A {} for {}: {}", addr, hostname, e),
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Block until a TCP connection to `addr` succeeds, retrying every 2 seconds.
-/// This ensures the DNS server is ready before we attempt any dynamic updates.
-async fn wait_for_dns_server(addr: StdSocketAddr) {
-    use tokio::net::TcpStream;
-    loop {
-        match TcpStream::connect(addr).await {
-            Ok(_) => {
-                info!("DNS server at {} is reachable, proceeding", addr);
-                return;
-            }
-            Err(e) => {
-                warn!("DNS server at {} not ready ({}), retrying in 2s...", addr, e);
-                time::sleep(Duration::from_secs(2)).await;
-            }
-        }
-    }
-}
