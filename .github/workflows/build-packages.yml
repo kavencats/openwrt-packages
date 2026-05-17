@@ -26,6 +26,7 @@ jobs:
           - luci-theme-argon
           - luci-app-oaf
           - komd-oaf
+          - appfilter
           - luci-app-taskplan
           - luci-app-diskman
           - luci-app-smbuser
