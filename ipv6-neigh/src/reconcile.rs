@@ -35,6 +35,14 @@ pub(crate) async fn process_new_neigh(
     match result {
         Ok(()) => {
             info!("DNS update: added {} -> {:?}", hostname, neigh.inet);
+            let ip = match &neigh.inet {
+                NeighbourAddress::Inet6(addr) => IpAddr::V6(*addr),
+                NeighbourAddress::Inet(addr)  => IpAddr::V4(*addr),
+                _ => return true,
+            };
+            if let Err(e) = updater.upsert_ptr(ip, hostname, DEFAULT_TTL).await {
+                warn!("PTR update failed for {} ({}): {}", hostname, ip, e);
+            }
             true
         }
         Err(e) => {
@@ -58,6 +66,14 @@ pub(crate) async fn do_delete_dns(
     match result {
         Ok(()) => {
             info!("DNS update: removed {} -> {:?}", hostname, inet);
+            let ip = match inet {
+                NeighbourAddress::Inet6(addr) => IpAddr::V6(*addr),
+                NeighbourAddress::Inet(addr)  => IpAddr::V4(*addr),
+                _ => return true,
+            };
+            if let Err(e) = updater.delete_ptr(ip).await {
+                warn!("PTR delete failed for {} ({}): {}", hostname, ip, e);
+            }
             true
         }
         Err(e) => {
@@ -67,20 +83,20 @@ pub(crate) async fn do_delete_dns(
     }
 }
 
-/// Enforce the per-host ULA AAAA limit.  If `mac` already has `max` or more ULA AAAA
+/// Enforce the per-host ULA AAAA limit.  If `host` already has `max` or more ULA AAAA
 /// records in `registered`, remove the oldest (by `last_confirmed`) and delete from DNS.
-/// Returns the number of existing ULA AAAA records for this MAC (after pruning).
-pub(crate) async fn prune_ula_for_mac(
-    mac: &str,
+/// Returns the number of existing ULA AAAA records for this host (after pruning).
+pub(crate) async fn prune_ula_for_host(
+    host: &str,
     max: usize,
     registered: &mut HashMap<(String, String), RegisteredEntry>,
     updater: &DnsUpdater,
 ) -> usize {
-    // Collect existing ULA AAAA keys for this MAC.
+    // Collect existing ULA AAAA keys for this host.
     let mut ula_keys: Vec<((String, String), Instant)> = registered
         .iter()
-        .filter(|((m, ip_str), _)| {
-            m == mac && ip_str.parse::<Ipv6Addr>().map_or(false, |a| if_ipv6_in_private_subnet(&a))
+        .filter(|((h, ip_str), _)| {
+            h == host && ip_str.parse::<Ipv6Addr>().map_or(false, |a| if_ipv6_in_private_subnet(&a))
         })
         .map(|(k, e)| (k.clone(), e.last_confirmed))
         .collect();
@@ -99,15 +115,15 @@ pub(crate) async fn prune_ula_for_mac(
             let addr: Ipv6Addr = key.1.parse().unwrap();
             let inet = NeighbourAddress::Inet6(addr);
             do_delete_dns(&entry.hostname, &inet, updater).await;
-            info!("ULA pruning: removed oldest {} -> {} for mac {}", entry.hostname, key.1, mac);
+            info!("ULA pruning: removed oldest {} -> {} for host {}", entry.hostname, key.1, host);
         }
     }
 
     // Return count after pruning.
     registered
         .iter()
-        .filter(|((m, ip_str), _)| {
-            m == mac && ip_str.parse::<Ipv6Addr>().map_or(false, |a| if_ipv6_in_private_subnet(&a))
+        .filter(|((h, ip_str), _)| {
+            h == host && ip_str.parse::<Ipv6Addr>().map_or(false, |a| if_ipv6_in_private_subnet(&a))
         })
         .count()
 }
@@ -172,7 +188,12 @@ pub(crate) async fn reconcile_dns(
                 IpAddr::V4(addr) => updater.delete_a(hostname, *addr).await,
             };
             match result {
-                Ok(()) => info!("reconcile: deleted stale DNS {} -> {}", hostname, ip),
+                Ok(()) => {
+                    info!("reconcile: deleted stale DNS {} -> {}", hostname, ip);
+                    if let Err(e) = updater.delete_ptr(*ip).await {
+                        warn!("reconcile: PTR delete failed for stale {} {}: {}", hostname, ip, e);
+                    }
+                }
                 Err(e) => warn!("reconcile: failed to delete stale DNS {} {}: {}", hostname, ip, e),
             }
         }
@@ -198,7 +219,14 @@ pub(crate) async fn reconcile_dns(
             _ => continue,
         };
         match del_result {
-            Ok(()) => info!("reconcile: deleted orphan DNS {} -> {}", hostname, ip_str),
+            Ok(()) => {
+                info!("reconcile: deleted orphan DNS {} -> {}", hostname, ip_str);
+                if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                    if let Err(e) = updater.delete_ptr(ip).await {
+                        warn!("reconcile: PTR delete failed for orphan {} {}: {}", hostname, ip_str, e);
+                    }
+                }
+            }
             Err(e) => warn!("reconcile: failed to delete orphan {} {}: {}", hostname, ip_str, e),
         }
         // Probe so alive devices trigger a REACHABLE event and re-register.
@@ -234,6 +262,11 @@ pub(crate) async fn reconcile_dns(
         match result {
             Ok(()) => {
                 info!("reconcile: re-pushed {} -> {}", hostname, ip_str);
+                if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                    if let Err(e) = updater.upsert_ptr(ip, hostname, DEFAULT_TTL).await {
+                        warn!("reconcile: PTR re-push failed for {} {}: {}", hostname, ip_str, e);
+                    }
+                }
                 entry.last_confirmed = Instant::now();
             }
             Err(e) => warn!("reconcile: failed to re-push {} {}: {}", hostname, ip_str, e),
