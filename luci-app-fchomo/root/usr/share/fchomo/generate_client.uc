@@ -511,6 +511,8 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		down: cfg.hysteria_down_mbps ? cfg.hysteria_down_mbps + ' Mbps' : null,
 		obfs: cfg.hysteria_obfs_type,
 		"obfs-password": cfg.hysteria_obfs_password,
+		"obfs-min-packet-size": strToInt(cfg.hysteria_obfs_min_packet_size),
+		"obfs-max-packet-size": strToInt(cfg.hysteria_obfs_max_packet_size),
 		"realm-opts": cfg.hysteria2_realm === '1' ? {
 			enable: true,
 			"server-url": cfg.hysteria2_realm_server_url,
@@ -562,6 +564,7 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		/* Snell */
 		psk: cfg.snell_psk,
 		version: cfg.snell_version,
+		reuse: strToBool(cfg.snell_reuse),
 		"obfs-opts": cfg.type === 'snell' ? {
 			mode: cfg.plugin_opts_obfsmode,
 			host: cfg.plugin_opts_host,
@@ -742,6 +745,7 @@ uci.foreach(uciconf, ucipgrp, (cfg) => {
 		"include-all": strToBool(cfg.include_all),
 		"include-all-proxies": strToBool(cfg.include_all_proxies),
 		"include-all-providers": strToBool(cfg.include_all_providers),
+		"empty-fallback": cfg.empty_fallback ? get_proxygroup(cfg.empty_fallback) : null,
 		// Url-test fields
 		tolerance: (cfg.type === 'url-test') ? strToInt(cfg.tolerance) ?? 150 : null,
 		// Load-balance fields
@@ -836,6 +840,7 @@ uci.foreach(uciconf, ucirule, (cfg) => {
 		} : {
 			path: HM_DIR + '/ruleset/' + cfg['.name'],
 			url: cfg.url,
+			"path-in-bundle": cfg.path_in_bundle,
 			"size-limit": bytesizeToByte(cfg.size_limit) || null,
 			interval: (cfg.type === 'http') ? durationToSecond(cfg.interval) ?? 259200 : null,
 			proxy: get_proxygroup(cfg.proxy),

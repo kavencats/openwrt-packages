@@ -24,7 +24,6 @@ function index()
 	local uci = api.uci			-- in function index()
 	local fs = api.fs
 	entry({"admin", "services", appname}).dependent = true
-	entry({"admin", "services", appname, "reset_config"}, call("reset_config")).leaf = true
 	entry({"admin", "services", appname, "show"}, call("show_menu")).leaf = true
 	entry({"admin", "services", appname, "hide"}, call("hide_menu")).leaf = true
 	entry({"admin", "services", appname, "ip"}, call('check_ip')).leaf = true
@@ -115,6 +114,7 @@ function index()
 	--[[Backup]]
 	entry({"admin", "services", appname, "create_backup"}, call("create_backup")).leaf = true
 	entry({"admin", "services", appname, "restore_backup"}, call("restore_backup")).leaf = true
+	entry({"admin", "services", appname, "reset_config"}, call("reset_config")).leaf = true
 
 	--[[geoview]]
 	entry({"admin", "services", appname, "geo_view"}, call("geo_view")).leaf = true
@@ -138,9 +138,15 @@ local function http_write_json_error(data)
 end
 
 function reset_config()
+	uci:revert(appname)
+	luci.sys.call("echo '' > /tmp/log/passwall.log")
 	luci.sys.call('/etc/init.d/passwall stop')
-	luci.sys.call('[ -f "/usr/share/passwall/0_default_config" ] && cp -f /usr/share/passwall/0_default_config /etc/config/passwall')
-	http.redirect(api.url())
+	if luci.sys.call('[ -s "/usr/share/passwall/0_default_config" ]') == 0 then
+		luci.sys.call('cp -f /usr/share/passwall/0_default_config /etc/config/passwall')
+		api.log(" * 恢复默认配置成功。")
+	else
+		api.log(" * 找不到默认配置文件，重置失败！")
+	end
 end
 
 function show_menu()
@@ -1138,10 +1144,12 @@ function fetch_certsha256()
 	local id = http.formvalue("id") or ""
 	local address = (id ~= "") and uci:get(appname, id, "address") or ""
 	local port = (id ~= "") and uci:get(appname, id, "port") or 0
-	if id == "" or address == "" or not api.datatypes.hostname(address) or port == 0 then
+	local sni = (id ~= "") and uci:get(appname, id, "tls_serverName") or ""
+	sni = (sni ~= "") and sni or address
+	if address == "" or port == 0 then
 		http_write_json_error()
 		return
 	end
-	local data = api.fetch_cert_sha256(address, port, 5)
+	local data = api.fetch_cert_sha256(address, port, sni, 5)
 	http_write_json(data ~= "" and { code = 1, data = data } or { code = 0 })
 end

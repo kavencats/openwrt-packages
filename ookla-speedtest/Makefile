@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ookla-speedtest
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=3
+PKG_RELEASE:=19
 
 ifeq ($(ARCH),aarch64)
   PKG_ARCH_SUFFIX:=aarch64

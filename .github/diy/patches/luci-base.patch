@@ -1,3 +1,17 @@
+--- a/luci-base/Makefile
++++ b/luci-base/Makefile
+@@ -55,8 +55,8 @@ exit 0
+ endef
+ 
+ define Build/Prepare/luci-base
+-	$(CP) ../../NOTICE $(PKG_BUILD_DIR)
+-	$(CP) ../../LICENSE $(PKG_BUILD_DIR)
++	$(CP) $(TOPDIR)/feeds/luci/NOTICE $(PKG_BUILD_DIR)
++	$(CP) $(TOPDIR)/feeds/luci/LICENSE $(PKG_BUILD_DIR)
+ endef
+ 
+ include $(TOPDIR)/feeds/luci/luci.mk
+
 --- a/luci-base/root/usr/share/rpcd/ucode/luci
 +++ b/luci-base/root/usr/share/rpcd/ucode/luci
 @@ -228,6 +228,7 @@ const methods = {
@@ -206,3 +220,31 @@
  	"admin/network": {
  		"title": "Network",
  		"order": 60,
+
+--- a/luci-base/htdocs/luci-static/resources/rpc.js
++++ b/luci-base/htdocs/luci-static/resources/rpc.js
+@@ -35,7 +35,7 @@ return baseclass.extend(/** @lends LuCI.rpc.prototype */ {
+ 		}
+ 
+ 		return request.post(rpcBaseURL + q, req, {
+-			timeout: (L.env.rpctimeout ?? 20) * 1000,
++			timeout: (L.env.rpctimeout ?? 60) * 1000,
+ 			nobatch,
+ 			credentials: true
+ 		}).then(cb, cb);
+
+--- a/luci-base/ucode/template/header.ut
++++ b/luci-base/ucode/template/header.ut
+@@ -23,12 +23,6 @@
+ 	include(`themes/${theme}/header`);
+ -%}
+ 
+-{% if (wizard_pending): %}
+-<script>
+-	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/wizard')) }});
+-</script>
+-{% endif %}
+-
+ <script src="{{ resource }}/luci.js?v={# PKG_VERSION #}-{{ pkgs_update_time }}"></script>
+ <script>
+ 	L = new LuCI({{ replace(`${ {

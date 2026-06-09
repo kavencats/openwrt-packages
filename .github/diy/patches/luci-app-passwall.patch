@@ -101,18 +101,6 @@
  config PACKAGE_$(PKG_NAME)_INCLUDE_Xray_Plugin
  	bool "Include Xray-Plugin (Shadowsocks Plugin)"
 
---- a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_subscribe_config.lua
-+++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_subscribe_config.lua
-@@ -134,7 +134,7 @@ o.validate = function(self, value)
- end
- 
- o = s:option(Flag, "allowInsecure", translate("allowInsecure"))
--o.default = "0"
-+o.default = "1"
- o.rmempty = false
- o.description = translate("Whether unsafe connections are allowed. When checked, Certificate validation will be skipped.") .. "<br>" ..
- 		translate("Used when the node link does not include this parameter.")
-
 --- a/luci-app-passwall/luasrc/controller/passwall.lua
 +++ b/luci-app-passwall/luasrc/controller/passwall.lua
 @@ -21,6 +21,8 @@ function index()
@@ -530,3 +518,15 @@ index 000000000000..a00fff9c79b3
  msgid "Auto"
  msgstr "自动"
  
+
+--- a/luci-app-passwall/luasrc/passwall/util_xray.lua
++++ b/luci-app-passwall/luasrc/passwall/util_xray.lua
+@@ -152,7 +152,7 @@ function gen_outbound(flag, node, tag, proxy_table)
+ 					serverName = node.tls_serverName,
+ 					allowInsecure = (function()
+ 								if node.tls_pinSHA256 and node.tls_pinSHA256 ~= "" then return nil end
+-								if api.compare_versions(os.date("%Y.%m.%d"), "<", "2026.6.1") and node.tls_allowInsecure == "1" then return true end
++								if node.tls_allowInsecure == "1" then return true end
+ 							end)(),
+ 					fingerprint = (node.type == "Xray" and node.utls == "1" and node.fingerprint and node.fingerprint ~= "") and node.fingerprint or nil,
+ 					pinnedPeerCertSha256 = (function()

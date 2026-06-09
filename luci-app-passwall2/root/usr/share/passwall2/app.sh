@@ -1012,9 +1012,10 @@ acl_app() {
 	[ -n "$items" ] && {
 		local index=0
 		local item
-		local redir_port dns_port dnsmasq_port
+		local redir_port dns_port dnsmasq_port socks_port
 		local ipt_tmp msg msg2
 		redir_port=11200
+		socks_port=11600
 		dns_port=11300
 		dnsmasq_port=${GLOBAL_DNSMASQ_PORT:-11400}
 		for item in $items; do
@@ -1098,12 +1099,13 @@ acl_app() {
 							set_cache_var "ACL_${sid}_default" "1"
 						else
 							redir_port=$(get_new_port $(expr $redir_port + 1))
+							socks_port=$(get_new_port $(expr $socks_port + 1))
 
 							local type=$(echo $(config_n_get $node type) | tr 'A-Z' 'a-z')
 							if [ -n "${type}" ]; then
 								config_file=$TMP_ACL_PATH/${node}_TCP_UDP_DNS_${redir_port}.json
 								dns_port=$(get_new_port $(expr $dns_port + 1))
-								local acl_socks_port=$(get_new_port $(expr $redir_port + $index))
+								local acl_socks_port=$socks_port
 								local run_func
 								[ -n "${XRAY_BIN}" ] && run_func="run_xray"
 								[ -n "${SINGBOX_BIN}" ] && run_func="run_singbox"
@@ -1147,8 +1149,9 @@ acl_app() {
 
 start() {
 	busybox pgrep -f /tmp/etc/passwall2/bin > /dev/null 2>&1 && {
-		#log_i18n 0 "The program has started. Please stop it and then restart it!"
-		stop
+		logger -t PW2-RESTART "Upgrade or overload residue is detected, and the subprocess is being called to perform complete cleaning..."
+		(stop)
+		sleep 2
 	}
 	mkdir -p /tmp/etc /tmp/log $TMP_PATH $TMP_BIN_PATH $TMP_SCRIPT_FUNC_PATH $TMP_ROUTE_PATH $TMP_ACL_PATH $TMP_PATH2
 	get_config
