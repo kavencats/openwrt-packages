@@ -458,6 +458,7 @@ o.remove = function() end
 
 o = s:option(Value, "filter_words", translate("Subscribe Filter Words"))
 o.rmempty = true
+o.default = "过期/重置/套餐/剩余/网址/QQ群/官网/防失联/回国"
 o.description = translate("Filter Words splited by /")
 o:depends("_subscribe_advanced_toggle", "1")
 preserve_when_hidden(o, "_subscribe_advanced_toggle", "1")
@@ -544,6 +545,33 @@ if has_mihomo then
 	o = s:option(DummyValue, "_upload_clash_yaml", translate("Upload Custom YAML File"))
 	o.template = "shadowsocksr/clash_yaml_upload"
 	o.description = translate("Upload a custom Clash/Mihomo YAML file. The file will be preprocessed and saved as a local Clash node.")
+
+	o = s:option(Flag, "enable_mihomo", string.format("<b><span style='color:red;'>%s</span></b>", translate("Enable Mihomo core")))
+	o.default = "0"
+	o.rmempty = true
+	o.description = translate("Disabled means use Xray or ShadowSocks-Rust core.")
+
+	o = s:option(Flag, "sub_convert", translate("Subscribe Convert Online"))
+	o.description = translate("Convert subscriptions to Clash/Mihomo YAML with a subscription template URL.")
+	o.default = "0"
+	o.rmempty = false
+	o:depends("enable_mihomo", "1")
+
+	o = s:option(Value, "convert_address", translate("Convert Address"))
+	o.default = "https://api.asailor.org/sub"
+	o.placeholder = "https://api.asailor.org/sub"
+	o:value("https://api.asailor.org/sub", "api.asailor.org")
+	o:value("https://api.wcc.best/sub", "api.wcc.best")
+	o.rmempty = true
+	o:depends("sub_convert", "1")
+
+	o = s:option(Value, "template_url", translate("Subscribe Template URL"))
+	o.default = "https://raw.githubusercontent.com/Fzlwhyc/OpenClash-Templates/main//fzlwhyc-openclash.ini"
+	o.placeholder = "https://raw.githubusercontent.com/Fzlwhyc/OpenClash-Templates/main//fzlwhyc-openclash.ini"
+	o:value("https://raw.githubusercontent.com/Fzlwhyc/OpenClash-Templates/main//fzlwhyc-openclash.ini", "Fzlwhyc")
+	o:value("https://gist.githubusercontent.com/vernesong/4c27ed54ab2a5fedd9c4011389ac11ed/raw/lhie1_clash.ini", "lhie1")
+	o.rmempty = true
+	o:depends("sub_convert", "1")
 end
 
 s:append(cbi.Template("shadowsocksr/subscribe_schedule_compact"))

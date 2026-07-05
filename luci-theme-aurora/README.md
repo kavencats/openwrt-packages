@@ -12,6 +12,7 @@
   <a href="https://github.com/eamonxg/luci-theme-aurora/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/eamonxg/luci-theme-aurora"></a>
   <a href="https://github.com/eamonxg/luci-theme-aurora/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/eamonxg/luci-theme-aurora/total"></a>
   <a href="https://discord.gg/EBncRrzfTw"><img alt="Discord" src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white"></a>
+  <a href="#contributing"><img alt="Contributors" src="https://img.shields.io/github/contributors/eamonxg/luci-theme-aurora?color=orange"></a>
 </div>
 
 <div align="center">
@@ -24,8 +25,9 @@
 - **Modern**: Modern, content-first UI design with a clean layout and elegant animations.
 - **Mobile-friendly**: Optimized for mobile interactions and display, supporting both smartphones and tablets.
 - **Theme Switcher**: Built-in theme switcher with seamless switching between Auto (system), Light, and Dark modes.
-- **Floating Toolbar**: Clickable button icons for quick access to frequently used pages
-- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin includes multiple built‑in theme presets you can switch between, and lets you customize colors, navigation submenu styles, the theme logo, and the floating toolbar (add or edit frequently used pages).
+- **Floating Toolbar**: Clickable button icons for quick access to frequently used pages.
+- **Installable (PWA)**: Ships a web app manifest and app icons, so LuCI can be installed to your home screen and launched like a native app.
+- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin includes multiple built‑in theme presets you can switch between, and lets you customize Light/Dark color tokens, the navigation layout (Mega Menu, Dropdown, Sidebar), layout density, typography, branding (logo, favicons, login background), and the floating toolbar (add or edit frequently used pages).
 
 ## Preview
 
@@ -50,7 +52,7 @@
   - **Safari 16.4+** _(released March 2023)_
   - **Firefox 128+** _(released July 2024)_
 
-## Installation
+## Install a pre-built release
 
 OpenWrt 25.12+ and snapshots use `apk`; other versions use `opkg`:
 
@@ -59,19 +61,73 @@ OpenWrt 25.12+ and snapshots use `apk`; other versions use `opkg`:
 - **opkg** (OpenWrt < 25.12):
 
   ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_0.12.0-r20260531_all.ipk && opkg install luci-theme-aurora.ipk
+  cd /tmp && uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_1.0.0-r20260619_all.ipk && opkg install luci-theme-aurora.ipk
   ```
 
 - **apk** (OpenWrt 25.12+ and snapshots):
   ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-0.12.0-r20260531.apk && apk add --allow-untrusted luci-theme-aurora.apk
+  cd /tmp && uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-1.0.0-r20260619.apk && apk add --allow-untrusted luci-theme-aurora.apk
   ```
+
+## Build from source
+
+Build the package yourself with the OpenWrt build system. Host prerequisites: [Build system setup](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem). The build writes the package to `bin/packages/<arch>/base/` (e.g. `bin/packages/x86_64/base/luci-theme-aurora_*_all.ipk`); copy it to your router and install it as above.
+
+### Via the OpenWrt buildroot
+
+```sh
+# Clone OpenWrt — the openwrt-24.10 branch builds an .ipk, the main branch builds an .apk
+git clone https://github.com/openwrt/openwrt.git
+cd openwrt
+git checkout openwrt-24.10       # omit to stay on main (snapshots → .apk)
+
+# Add this package and install feeds (provides luci-base)
+git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-aurora
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# Select the theme in menuconfig: LuCI → Themes → luci-theme-aurora
+make menuconfig
+
+# Build host tools + toolchain, then compile the package
+make tools/install -j$(nproc)
+make toolchain/install -j$(nproc)
+make package/luci-theme-aurora/compile -j$(nproc) V=s
+```
+
+### Via the prebuilt SDK (faster)
+
+The [OpenWrt SDK](https://openwrt.org/docs/guide-developer/toolchain/using_the_sdk) bundles a prebuilt toolchain, so the `tools/install` / `toolchain/install` steps are skipped. Download the SDK for your target from [downloads.openwrt.org](https://downloads.openwrt.org) (a release SDK builds `.ipk`, a snapshot SDK builds `.apk`), extract it, then from the SDK directory:
+
+```sh
+git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-aurora
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# Select the theme in menuconfig: LuCI → Themes → luci-theme-aurora
+make menuconfig
+make package/luci-theme-aurora/compile -j$(nproc) V=s
+```
 
 ## Contributing
 
 Aurora uses **Vite** and a modern front-end toolchain, and is experimenting with end-to-end AI integration across the full development workflow. See [Development Documentation](.dev/docs/DEVELOPMENT.md) to get started. Suggestions and PRs are always welcome.
 
 [discord.gg/EBncRrzfTw](https://discord.gg/EBncRrzfTw)
+
+Thanks goes to these wonderful people:
+
+<!-- contributors:start -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/eamonxg"><img src="https://avatars.githubusercontent.com/u/114069097?v=4&s=160" width="80px;" alt="eamonxg"/><br /><sub><b>eamonxg</b></sub></a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/cjayacopra"><img src="https://avatars.githubusercontent.com/u/83209495?v=4&s=160" width="80px;" alt="cjayacopra"/><br /><sub><b>cjayacopra</b></sub></a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/chillykidd"><img src="https://avatars.githubusercontent.com/u/197483577?v=4&s=160" width="80px;" alt="chillykidd"/><br /><sub><b>chillykidd</b></sub></a></td>
+    </tr>
+  </tbody>
+</table>
+<!-- contributors:end -->
 
 ## License & Credits
 

@@ -16,8 +16,10 @@
 @import "./_tokens.css";
 
 @import "./_base.css";
+@import "./_elements.css";
 @import "./_layout.css";
 
+@import "./components/_nav.css";
 @import "./components/_switcher.css";
 @import "./components/_float-button.css";
 @import "./components/_button.css";
@@ -38,5 +40,5 @@
 @import "./components/_tab.css";
 
 @import "./_utilities.css";
-@import "./_plugins.css";
-@import "./_patches.css";
+@import "./_reduced-motion.css";
+@import "./_reduced-transparency.css";

@@ -86,6 +86,88 @@ local function find_wechat_plugin_dir(install_path)
 	return nil
 end
 
+local function wechat_register_plugin_cmd(install_path, node_bin, log_file)
+	local oc_data = install_path .. "/data"
+	local config_file = oc_data .. "/.openclaw/openclaw.json"
+	local npm_projects = oc_data .. "/.openclaw/npm/projects"
+	local legacy_ext_dir = oc_data .. "/.openclaw/extensions/openclaw-weixin"
+	local register_js = [[
+const fs = require('fs');
+const path = require('path');
+const configPath = process.env.OC_CONFIG;
+const npmProjects = process.env.OC_NPM_PROJECTS;
+const legacyDir = process.env.OC_LEGACY_WECHAT_DIR;
+const candidates = [];
+function addPluginDir(dir) {
+  if (!dir) return;
+  const pluginJson = path.join(dir, 'openclaw.plugin.json');
+  try {
+    const st = fs.statSync(pluginJson);
+    if (st.isFile()) candidates.push({ dir, mtime: st.mtimeMs });
+  } catch (e) {}
+}
+function walk(dir) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(dir, entry.name);
+    if (full.endsWith(path.join('node_modules', '@tencent-weixin', 'openclaw-weixin'))) {
+      addPluginDir(full);
+      continue;
+    }
+    walk(full);
+  }
+}
+addPluginDir(legacyDir);
+walk(npmProjects);
+candidates.sort((a, b) => b.mtime - a.mtime);
+if (!candidates.length) {
+  console.error('openclaw-weixin plugin directory not found');
+  process.exit(2);
+}
+let d = {};
+try {
+  d = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+} catch (e) {
+  d = {};
+}
+if (!d.plugins || typeof d.plugins !== 'object') d.plugins = {};
+if (!d.plugins.installs || typeof d.plugins.installs !== 'object') d.plugins.installs = {};
+if (!Array.isArray(d.plugins.allow)) d.plugins.allow = [];
+d.plugins.installs['openclaw-weixin'] = {
+  kind: 'npm',
+  installPath: candidates[0].dir,
+  packageName: '@tencent-weixin/openclaw-weixin'
+};
+if (!d.plugins.allow.includes('openclaw-weixin')) d.plugins.allow.push('openclaw-weixin');
+if (!d.channels || typeof d.channels !== 'object') d.channels = {};
+if (!d.channels['openclaw-weixin'] || typeof d.channels['openclaw-weixin'] !== 'object') {
+  d.channels['openclaw-weixin'] = {};
+}
+d.channels['openclaw-weixin'].enabled = true;
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, JSON.stringify(d, null, 2) + '\n');
+]]
+	return "if [ $RC -eq 0 ]; then " ..
+		"if [ -x " .. shellquote(node_bin) .. " ]; then " ..
+		"OC_CONFIG=" .. shellquote(config_file) .. " " ..
+		"OC_NPM_PROJECTS=" .. shellquote(npm_projects) .. " " ..
+		"OC_LEGACY_WECHAT_DIR=" .. shellquote(legacy_ext_dir) .. " " ..
+		shellquote(node_bin) .. " -e " .. shellquote(register_js) .. " >> " .. shellquote(log_file) .. " 2>&1; " ..
+		"REG_RC=$?; " ..
+		"if [ $REG_RC -eq 0 ]; then " ..
+		"chown openclaw:openclaw " .. shellquote(config_file) .. " 2>/dev/null; " ..
+		"echo 'Registered openclaw-weixin npm plugin in OpenClaw config.' >> " .. shellquote(log_file) .. "; " ..
+		"else RC=$REG_RC; echo $RC > /tmp/openclaw-wechat-install.exit; echo 'Failed to register openclaw-weixin npm plugin in OpenClaw config.' >> " .. shellquote(log_file) .. "; fi; " ..
+		"else RC=127; echo $RC > /tmp/openclaw-wechat-install.exit; echo 'Node.js not found, cannot register openclaw-weixin plugin.' >> " .. shellquote(log_file) .. "; fi; " ..
+		"fi; "
+end
+
 local function write_wechat_log_and_exit(log_file, exit_file, content, exit_code)
 	local f = io.open(log_file, "w")
 	if f then
@@ -97,6 +179,17 @@ local function write_wechat_log_and_exit(log_file, exit_file, content, exit_code
 		ef:write(tostring(exit_code or 1))
 		ef:close()
 	end
+end
+
+local function wechat_python3_bootstrap_cmd(log_file)
+	return "if ! command -v python3 >/dev/null 2>&1; then " ..
+		"echo '未检测到 python3，正在尝试安装 python3-light...' >> " .. shellquote(log_file) .. "; " ..
+		"(opkg update && opkg install python3-light) >> " .. shellquote(log_file) .. " 2>&1 || true; " ..
+		"fi; " ..
+		"if ! command -v python3 >/dev/null 2>&1; then " ..
+		"echo '❌ python3-light 自动安装失败，请手动执行: opkg update && opkg install python3-light' >> " .. shellquote(log_file) .. "; " ..
+		"echo 127 > /tmp/openclaw-wechat-install.exit; exit 0; " ..
+		"fi; "
 end
 
 function index()
@@ -808,10 +901,8 @@ function action_backup()
 	local uci = require "luci.model.uci".cursor()
 	local action = http.formvalue("action") or "create"
 
-	-- 获取安装路径
-	local install_path_uci = uci:get("openclaw", "main", "install_path") or "/opt"
-	-- 实际安装路径
-	local install_path = install_path_uci .. "/openclaw"
+	-- 使用统一路径 helper，兼容用户误填 /mnt/data/openclaw 的场景。
+	local install_path = get_install_path()
 	local node_bin = install_path .. "/node/bin/node"
 	local oc_entry = ""
 
@@ -1326,17 +1417,6 @@ function action_wechat_install()
 		http.write_json({ status = "ok", message = "微信插件安装已在后台启动..." })
 		return
 	end
-	if sys.exec("command -v python3 2>/dev/null"):gsub("%s+", "") == "" then
-		write_wechat_log_and_exit(
-			"/tmp/openclaw-wechat-install.log",
-			"/tmp/openclaw-wechat-install.exit",
-			"开始安装微信插件...\n安装路径: " .. install_path .. "\n❌ 错误: 未检测到 python3。\n请先安装依赖: opkg update && opkg install python3\n",
-			127
-		)
-		http.prepare_content("application/json")
-		http.write_json({ status = "ok", message = "微信插件安装已在后台启动..." })
-		return
-	end
 	if not ensure_openclaw_user(oc_data) then
 		write_wechat_log_and_exit(
 			"/tmp/openclaw-wechat-install.log",
@@ -1360,6 +1440,7 @@ function action_wechat_install()
 		"echo '开始安装微信插件...' > /tmp/openclaw-wechat-install.log; " ..
 		"echo '安装路径: %s' >> /tmp/openclaw-wechat-install.log; " ..
 		"echo 'npx 路径: %s' >> /tmp/openclaw-wechat-install.log; " ..
+		wechat_python3_bootstrap_cmd("/tmp/openclaw-wechat-install.log") ..
 		"mkdir -p %s/.npm %s/.tmp %s/.openclaw/extensions; " ..
 		"if [ ! -w %s/.openclaw/extensions ]; then chown -R openclaw:openclaw %s/.openclaw/extensions 2>/dev/null; fi; " ..
 		"chown -R openclaw:openclaw %s/.npm %s/.tmp %s/.openclaw 2>/dev/null; " ..
@@ -1371,6 +1452,7 @@ function action_wechat_install()
 		"PATH=%s/node/bin:%s/global/bin:$PATH " ..
 		"%s -y @tencent-weixin/openclaw-weixin-cli install' >> /tmp/openclaw-wechat-install.log 2>&1; " ..
 		"RC=$?; echo $RC > /tmp/openclaw-wechat-install.exit; " ..
+		wechat_register_plugin_cmd(install_path, node_bin, "/tmp/openclaw-wechat-install.log") ..
 		-- 关键修复: 安装完成后强制修复插件目录权限 (确保 Gateway 可读取插件)
 		-- 原因: npx/npm 以 root 身份创建目录，默认权限 700 导致其他用户无法读取
 		-- 注意: 保持 root:root 属主 (OpenClaw v2026.4.9+ 安全要求)，仅修复权限模式
@@ -1496,7 +1578,11 @@ function action_wechat_login()
                 "( " ..
                 "echo '正在启动微信登录...' > /tmp/openclaw-wechat-qrcode.txt; " ..
                 "echo '安装路径: %s' >> /tmp/openclaw-wechat-qrcode.txt; " ..
-                "mkdir -p %s/.npm %s/.tmp %s/.openclaw; chown -R openclaw:openclaw %s/.npm %s/.tmp %s/.openclaw 2>/dev/null; " ..
+                "mkdir -p %s/.npm %s/.tmp %s/.openclaw/openclaw-weixin; " ..
+                "touch %s/.openclaw/openclaw.json 2>/dev/null || true; " ..
+                "chown -R openclaw:openclaw %s/.npm %s/.tmp %s/.openclaw/openclaw-weixin 2>/dev/null; " ..
+                "chown openclaw:openclaw %s/.openclaw %s/.openclaw/openclaw.json 2>/dev/null; " ..
+                "su -s /bin/sh openclaw -c 'test -w %s/.npm && test -w %s/.tmp && test -w %s/.openclaw && test -w %s/.openclaw/openclaw-weixin && test -w %s/.openclaw/openclaw.json' || { echo '❌ openclaw 用户无法写入微信登录目录，请检查数据目录权限' >> /tmp/openclaw-wechat-qrcode.txt; echo 1 > /tmp/openclaw-wechat-login.exit; exit 0; }; " ..
                 "cd %s && " ..
                 "su -s /bin/sh openclaw -c 'HOME=%s OPENCLAW_HOME=%s OPENCLAW_STATE_DIR=%s/.openclaw OPENCLAW_CONFIG_PATH=%s/.openclaw/openclaw.json " ..
                 "NPM_CONFIG_CACHE=%s/.npm npm_config_cache=%s/.npm TMPDIR=%s/.tmp PATH=%s/node/bin:%s/global/bin:$PATH " ..
@@ -1504,9 +1590,10 @@ function action_wechat_login()
                 "echo $? > /tmp/openclaw-wechat-login.exit; " ..
                 ") >/dev/null 2>&1 & echo $! > /tmp/openclaw-wechat-login.pid",
                 install_path,
-                oc_data, oc_data, oc_data, oc_data, oc_data, oc_data,
-                oc_data, oc_data, oc_data, oc_data, oc_data,
-                oc_data, oc_data, oc_data, install_path, install_path, node_bin, oc_entry
+                oc_data, oc_data, oc_data, oc_data, oc_data, oc_data, oc_data,
+                oc_data, oc_data, oc_data, oc_data, oc_data, oc_data, oc_data,
+                oc_data, oc_data, oc_data, oc_data, oc_data, oc_data, oc_data, oc_data,
+                install_path, install_path, node_bin, oc_entry
         )	sys.exec(login_cmd)
 
 	http.prepare_content("application/json")
@@ -1594,34 +1681,59 @@ function action_wechat_uninstall()
 	local sys = require "luci.sys"
 
 	local install_path = get_install_path()
+	local node_bin = install_path .. "/node/bin/node"
+	local oc_data = install_path .. "/data"
 
-	-- 删除微信插件目录
-	local wechat_ext_dir = install_path .. "/data/.openclaw/extensions/openclaw-weixin"
-	if wechat_ext_dir == install_path .. "/data/.openclaw/extensions/openclaw-weixin" then
-		sys.exec("rm -rf " .. shellquote(wechat_ext_dir) .. " 2>/dev/null")
+	-- 删除微信插件目录和账号状态。所有路径都限制在当前 OpenClaw 数据目录下。
+	local wechat_ext_dir = oc_data .. "/.openclaw/extensions/openclaw-weixin"
+	local wechat_state_dir = oc_data .. "/.openclaw/openclaw-weixin"
+	local npm_projects = oc_data .. "/.openclaw/npm/projects"
+	sys.exec("rm -rf " .. shellquote(wechat_ext_dir) .. " " .. shellquote(wechat_state_dir) .. " 2>/dev/null")
+	if nixio.fs.stat(npm_projects, "type") then
+		sys.exec("find " .. shellquote(npm_projects) .. " -path '*/node_modules/@tencent-weixin/openclaw-weixin' -type d -prune -exec rm -rf {} + 2>/dev/null")
+		sys.exec("find " .. shellquote(npm_projects) .. " -path '*/node_modules/@tencent-weixin/openclaw-weixin-cli' -type d -prune -exec rm -rf {} + 2>/dev/null")
 	end
 
 	-- 从配置中删除微信相关配置
-	local config_file = install_path .. "/data/.openclaw/openclaw.json"
+	local config_file = oc_data .. "/.openclaw/openclaw.json"
 	if nixio.fs.stat(config_file, "type") then
-		-- 读取配置
-		local cf = io.open(config_file, "r")
-		local content = ""
-		if cf then
-			content = cf:read("*a") or ""
-			cf:close()
+		local cleanup_js = [[
+const fs = require('fs');
+const p = process.env.OC_CONFIG;
+let d = {};
+try { d = JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { process.exit(0); }
+function drop(o, k) { if (o && typeof o === 'object') delete o[k]; }
+function dropChannel(o) { drop(o, 'openclaw-weixin'); drop(o, 'weixin'); }
+if (d.plugins && Array.isArray(d.plugins.allow)) {
+  d.plugins.allow = d.plugins.allow.filter((x) => x !== 'openclaw-weixin' && x !== 'weixin');
+}
+if (d.plugins) {
+  dropChannel(d.plugins.installs);
+  dropChannel(d.plugins.entries);
+}
+dropChannel(d.channels);
+dropChannel(d.channel);
+dropChannel(d);
+fs.writeFileSync(p, JSON.stringify(d, null, 2));
+]]
+		if nixio.fs.stat(node_bin, "type") then
+			sys.exec("OC_CONFIG=" .. shellquote(config_file) .. " " .. shellquote(node_bin) .. " -e " .. shellquote(cleanup_js) .. " 2>/dev/null")
+		else
+			local cf = io.open(config_file, "r")
+			local content = ""
+			if cf then
+				content = cf:read("*a") or ""
+				cf:close()
+			end
+			content = content:gsub(',?%s*"openclaw%-weixin"%s*:%s*%b{}', "")
+			content = content:gsub('"openclaw%-weixin"%s*:%s*%b{}%s*,?', "")
+			local wf = io.open(config_file, "w")
+			if wf then
+				wf:write(content)
+				wf:close()
+			end
 		end
-
-		-- 删除微信配置块 (简单字符串替换)
-		content = content:gsub(',?%s*"openclaw%-weixin"%s*:%s*%b{}', "")
-		content = content:gsub('"openclaw%-weixin"%s*:%s*%b{}%s*,?', "")
-
-		-- 写回配置
-		local wf = io.open(config_file, "w")
-		if wf then
-			wf:write(content)
-			wf:close()
-		end
+		sys.exec("chown openclaw:openclaw " .. shellquote(config_file) .. " 2>/dev/null")
 	end
 
 	-- 清理临时文件
@@ -1717,17 +1829,6 @@ function action_wechat_upgrade_plugin()
 		http.write_json({ status = "ok", message = "微信插件升级已在后台启动..." })
 		return
 	end
-	if sys.exec("command -v python3 2>/dev/null"):gsub("%s+", "") == "" then
-		write_wechat_log_and_exit(
-			"/tmp/openclaw-wechat-install.log",
-			"/tmp/openclaw-wechat-install.exit",
-			"正在升级微信插件...\n安装路径: " .. install_path .. "\n❌ 错误: 未检测到 python3。\n请先安装依赖: opkg update && opkg install python3\n",
-			127
-		)
-		http.prepare_content("application/json")
-		http.write_json({ status = "ok", message = "微信插件升级已在后台启动..." })
-		return
-	end
 	if not ensure_openclaw_user(oc_data) then
 		write_wechat_log_and_exit(
 			"/tmp/openclaw-wechat-install.log",
@@ -1751,6 +1852,7 @@ function action_wechat_upgrade_plugin()
 		"echo '正在升级微信插件...' > /tmp/openclaw-wechat-install.log; " ..
 		"echo '安装路径: %s' >> /tmp/openclaw-wechat-install.log; " ..
 		"echo 'npx 路径: %s' >> /tmp/openclaw-wechat-install.log; " ..
+		wechat_python3_bootstrap_cmd("/tmp/openclaw-wechat-install.log") ..
 		"mkdir -p %s/.npm %s/.tmp %s/.openclaw/extensions; " ..
 		"if [ ! -w %s/.openclaw/extensions ]; then chown -R openclaw:openclaw %s/.openclaw/extensions 2>/dev/null; fi; " ..
 		"chown -R openclaw:openclaw %s/.npm %s/.tmp %s/.openclaw 2>/dev/null; " ..
@@ -1762,6 +1864,7 @@ function action_wechat_upgrade_plugin()
 		"PATH=%s/node/bin:%s/global/bin:$PATH " ..
 		"%s -y @tencent-weixin/openclaw-weixin-cli install' >> /tmp/openclaw-wechat-install.log 2>&1; " ..
 		"RC=$?; echo $RC > /tmp/openclaw-wechat-install.exit; " ..
+		wechat_register_plugin_cmd(install_path, node_bin, "/tmp/openclaw-wechat-install.log") ..
 		-- 关键修复: 升级完成后强制修复插件目录权限 (确保 Gateway 可读取插件)
 		-- 注意: 保持 root:root 属主 (OpenClaw v2026.4.9+ 安全要求)，仅修复权限模式
 		"chown -R root:root %s 2>/dev/null; chmod -R 755 %s 2>/dev/null; " ..

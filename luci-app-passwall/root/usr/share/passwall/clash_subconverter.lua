@@ -99,7 +99,9 @@ local function build_common(node)
 	elseif net == "http" then
 		local opts = node["http-opts"]
 		if opts then
-			o.transport.host = get_first(opts.host)
+			-- Clash http-opts carries the camouflage Host under headers.Host
+			-- (a list), like ws-opts; opts.host is not standard for http.
+			o.transport.host = get_first(opts.host) or (opts.headers and get_first(opts.headers.Host))
 			o.transport.path = get_first(opts.path)
 		end
 
@@ -396,6 +398,8 @@ local function encode_hysteria2(node)
 	if node["ports"] then table.insert(p, "mport=" .. urlencode(node["ports"])) end
 	if node.obfs then table.insert(p, "obfs=" .. node.obfs) end
 	if node["obfs-password"] then table.insert(p, "obfs-password=" .. node["obfs-password"]) end
+	if node["obfs-min-packet-size"] then table.insert(p, "minPacketSize=" .. node["obfs-min-packet-size"]) end
+	if node["obfs-max-packet-size"] then table.insert(p, "maxPacketSize=" .. node["obfs-max-packet-size"]) end
 	if node.up then table.insert(p, "upmbps=" .. node.up) end
 	if node.down then table.insert(p, "downmbps=" .. node.down) end
 
@@ -442,14 +446,17 @@ local function encode_anytls(node)
 	local link = "anytls://" .. (node.password or "") .. "@" .. host_format(node.server) .. ":" .. node.port
 	local p = {}
 
+	if o.tls.security then table.insert(p, "security=" .. o.tls.security) end
+	if o.tls.pbk then table.insert(p, "pbk=" .. urlencode(o.tls.pbk)) end
+	if o.tls.sid then table.insert(p, "sid=" .. urlencode(o.tls.sid)) end
 	if o.tls.sni then table.insert(p, "sni=" .. urlencode(o.tls.sni)) end
 	if o.tls.alpn then table.insert(p, "alpn=" .. urlencode(o.tls.alpn)) end
 	if o.tls.fp then table.insert(p, "fp=" .. urlencode(o.tls.fp)) end
 	if o.tls.ech then table.insert(p, "ech=" .. urlencode(o.tls.ech)) end
 	if o.tls.pcs then
-		table.insert(p, "allowInsecure=1")
+		table.insert(p, "insecure=1")
 	else
-		table.insert(p, "allowInsecure=" .. (o.tls.insecure and "1" or "0"))
+		table.insert(p, "insecure=" .. (o.tls.insecure and "1" or "0"))
 	end
 
 	if #p > 0 then

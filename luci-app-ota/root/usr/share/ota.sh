@@ -33,6 +33,12 @@
 
 . /lib/functions.sh
 
+PROGRESS_FILE=/tmp/ota_progress
+VERSION_FILE=/tmp/ota_version
+
+set_progress() {
+	echo "$1" > ${PROGRESS_FILE}
+}
 
 load_config(){
         config_get url $1 url
@@ -46,7 +52,6 @@ URL_BASE=$url
 if [ "x${URL_BASE}" = "x" ]; then
 	exit 0
 fi
-
 
 # Get OpenWrt Release info
 [ -f /etc/openwrt_release ] && {
@@ -65,20 +70,16 @@ BOARD=$(jsonfilter -s "$(cat /etc/board.json)" -e '@["model"]["id"]')
 # Remove update files
 remove_files(){
 	for f in firmware.bin changelog.txt; do
-		[ -f /tmp/${f} ] && {
-			rm -rf /tmp/${f}
-		}
+		[ -f /tmp/${f} ] && rm -rf /tmp/${f}
 	done
 }
 
 case $1 in
 	check)
-
 		if [ ! -f /tmp/update.lock ]; then
 			echo -e "Check updates from ${URL_BASE}\n"
 		fi
 
-		# Get aviable profiles
 		! [ -f /tmp/profiles.json ] && {
 			wget ${URL_BASE}/targets/${DISTRIB_TARGET}/profiles.json -O /tmp/profiles.json > /dev/null 2>&1
 		}
@@ -88,7 +89,6 @@ case $1 in
 			exit 0
 		}
 
-		# Get changelog
 		[ -f /tmp/profiles.json ] && {
 			[ ! -f /tmp/changelog.txt ] && {
 				wget ${URL_BASE}/changelog.txt -O /tmp/changelog.txt > /dev/null 2>&1
@@ -105,12 +105,12 @@ esac
 BASE_BOARD=$(jsonfilter -s "$(cat /tmp/profiles.json)" -e '@["profiles"][*]["supported_devices"].*')
 
 # Get available board info
-
 board_stuff(){
         IMAGES=$(jsonfilter -s "$(cat /tmp/profiles.json)" -e "@['profiles']['$FW_BOARD']['images'][*]" | grep sysupgrade)
         echo $IMAGES | jsonfilter \
                 -e FILE="$['name']" \
-                -e SHA256="$['sha256']"
+                -e SHA256="$['sha256']" \
+                -e FILESIZE="$['size']"
 }
 
 #sha256check(){
@@ -119,7 +119,6 @@ board_stuff(){
 # stuff
 for b in $BASE_BOARD; do
 	if [ "${b}" = "${BOARD}" ]; then
-		# modify board name for profiles.json
 		FW_BOARD=$(echo $BOARD | sed -e 's/\,/_/')
 		[ -f /tmp/profiles.json ] && {
 			eval $(board_stuff)
@@ -127,9 +126,7 @@ for b in $BASE_BOARD; do
 			echo "Failed! Abort update"
 			remove_files
 		}
-		# Get remote revision firmware
 		FW_REV_EXT=$(echo $FILE | awk -F [-] '{gsub("rev",""); gsub(/\./,"",$2);  print $2$5$6}')
-		# Get local revision firmware
 		if [ -f /rom/etc/uci-defaults/fw_rev ]; then
 			. /rom/etc/uci-defaults/fw_rev
 			VER_LOCAL=$(echo $FW_REV | awk -F [-] '{gsub("rev",""); print $1$2}')
@@ -139,43 +136,67 @@ for b in $BASE_BOARD; do
 			echo "Failed! Abort update"
 			exit 0
 		fi
-		# Firmware upgrade
 		case $1 in
 			upgrade)
 			if [ -f /tmp/update.lock ]; then
 				echo "Download firmware $FILE"
 				echo "from $URL_BASE"
-				wget $URL_BASE/targets/${DISTRIB_TARGET}/$FILE -O /tmp/firmware.bin > /dev/null 2>&1
-				case $? in
-					0) echo "Download complete." ;;
-					*) echo "No updates for this board: $BOARD" && remove_files && exit 0 ;;
+				set_progress "downloading 0"
+
+				# Download with uclient-fetch, parse % from stderr progress bar
+				uclient-fetch -O /tmp/firmware.bin ${URL_BASE}/targets/${DISTRIB_TARGET}/$FILE 2>&1 | while IFS= read -r line; do
+					pct=$(echo "$line" | grep -o '[0-9]*%' | tr -d '%' | tail -1)
+					[ -n "$pct" ] && set_progress "downloading $pct"
+				done
+				# Bash, not ash
+				#DL_RC=${PIPESTATUS[0]:-$?}
+				DL_RC=$?
+				# ash-safe fallback: check file exists and non-empty
+				[ -s /tmp/firmware.bin ] && DL_RC=0
+
+				sleep 2
+				case $DL_RC in
+					0) echo "Download complete."
+					   set_progress "downloading 100" ;;
+					*) echo "Download failed for board: $BOARD"
+					   set_progress "error download"
+					   remove_files && exit 1 ;;
 				esac
-				# Get local SHA256
+
+				sleep 2
+				set_progress "verifying"
 				SHA256_DL=$(sha256sum /tmp/firmware.bin | awk '{print $1}')
 				echo -n "Check sha256 sum: "
-				# Compare remote and download file SHA256
 				if [ "$SHA256" = "$SHA256_DL" ]; then
 					echo "OK"
 					echo "Update process start!"
 					echo "Device will be rebooted."
 					echo "DO NOT TURN OFF DEVICE!"
-					# Test firmware image before flashing
+					sleep 2
+					set_progress "testing"
 					sysupgrade -T /tmp/firmware.bin
 					case $? in
 						0) echo "Flashing firmware" ;;
-						*) echo "Failed! Abort update" && remove_files && exit 0 ;;
+						*) echo "Failed! Abort update"
+						   set_progress "error verify"
+						   remove_files && exit 1 ;;
 					esac
+					sleep 2
+					set_progress "flashing"
 					rm -rf /tmp/update.lock /tmp/profiles.json /tmp/changelog.txt
-					# Updrade firmware
-					sleep 25 && sysupgrade /tmp/firmware.bin &
+					# Exit cleanly before sysupgrade takes over
+					sleep 30 && sysupgrade /tmp/firmware.bin &
+					exit 0
 				else
 					echo "Failed! Abort update."
+					set_progress "error sha256"
 					remove_files && rm -rf /tmp/update.lock /tmp/profiles.json
+					exit 1
 				fi
 			fi
 			;;
 			check)
-			# Compare firmware versions
+			. /usr/lib/os-release
 			if [ $FW_REV_EXT -gt $FW_VER_LOCAL ]; then
 				echo "New firmware upgrade release!"
 				echo -e "*** $FILE ***\n"
@@ -186,8 +207,16 @@ for b in $BASE_BOARD; do
 				echo ""
 				echo "Please run script again for download and install update!"
 				touch /tmp/update.lock
+				# Write version info for LuCI
+				# Extract prefix (everything before YYYYMM date) from remote filename
+				VER_PREFIX=$(echo $FILE | sed 's/-[0-9]\{6\}-rev[0-9]*-.*//')
+				VER_UPGRADE="${VER_PREFIX}-$(echo $FILE | sed 's/.*-\([0-9]\{6\}-rev[0-9]*\)-.*/\1/')"
+				VER_CURRENT="${VER_PREFIX}-${FW_REV}"
+				printf "current=%s\nupgrade=%s\n" "$VER_CURRENT" "$VER_UPGRADE" > ${VERSION_FILE}
 			else
 				echo "Update not found!"
+				# Write only current version using OPENWRT_RELEASE prefix + local FW_REV
+				printf "current=%s\nupgrade=\n" "${OPENWRT_RELEASE%~*} $FW_REV" > ${VERSION_FILE}
 			fi
 			;;
 		esac

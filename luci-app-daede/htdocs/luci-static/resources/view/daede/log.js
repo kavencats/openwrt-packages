@@ -15,9 +15,10 @@ const CSS = [
 	'.dd-log-card-title{font-size:11px;font-weight:600;opacity:.55;margin:0 0 8px;letter-spacing:.3px;text-transform:uppercase}',
 	'.dd-log-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0 0 8px;margin-bottom:8px;border-bottom:1px dashed rgba(128,128,128,.2)}',
 	'.dd-log-toolbar label{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;margin:0;opacity:.85}',
-	'.dd-log-toolbar input[type="checkbox"]{margin:0}',
+	/* Argon shifts label>checkbox down by top:.4rem; reset so flex centers it with the text */
+	'.dd-log-toolbar input[type="checkbox"]{position:static;top:auto;right:auto;margin:0}',
 	'.dd-log-toolbar input[type="text"]{font-size:11.5px;padding:4px 8px;border-radius:5px;border:1px solid rgba(128,128,128,.28);background:transparent;color:inherit;min-width:160px}',
-	'.dd-log-toolbar .dd-log-btn{font-size:11.5px;padding:4px 12px;border-radius:5px;border:1px solid rgba(128,128,128,.28);background:transparent;color:inherit;cursor:pointer}',
+	'.dd-log-toolbar .dd-log-btn{font-size:11.5px;line-height:1.4;min-height:0;height:auto;padding:4px 12px;border-radius:5px;border:1px solid rgba(128,128,128,.28);background:transparent;color:inherit;cursor:pointer}',
 	'.dd-log-toolbar .dd-log-btn:hover{background:rgba(128,128,128,.1)}',
 	'.dd-log-toolbar .dd-log-meta{margin-left:auto;font-size:10.5px;opacity:.55;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}',
 	'.dd-log-pane{height:60vh;min-height:360px;overflow:auto;padding:8px 10px;border:1px solid rgba(0,0,0,.08);border-radius:7px;background:#1a1d21;color:#d8dde6;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;word-break:break-all}',
@@ -55,17 +56,18 @@ function detectLevel(line) {
 	return 'dd-error';
 }
 
-/* 简化时间戳并按本地时区显示：
- * - daed 默认输出 UTC ISO 8601 (e.g. "2026-05-28T19:07:54Z")，转成本地时间
+/* 简化时间戳并按北京时间显示：
+ * - daed 默认输出 UTC ISO 8601 (e.g. "2026-05-28T19:07:54Z")，转成北京时间
  * - 旧 logrus 短格式 (e.g. "May 25 07:04:59") 无时区信息，原样提取
  */
 function shortTs(raw) {
 	if (!raw) return raw;
-	if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(raw)) {
+	if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) {
 		const d = new Date(raw);
 		if (!isNaN(d.getTime())) {
+			const beijing = new Date(d.getTime() + 8 * 60 * 60 * 1000);
 			const pad = n => String(n).padStart(2, '0');
-			return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+			return pad(beijing.getUTCHours()) + ':' + pad(beijing.getUTCMinutes()) + ':' + pad(beijing.getUTCSeconds());
 		}
 	}
 	const m = raw.match(/(\d{2}:\d{2}:\d{2})/);

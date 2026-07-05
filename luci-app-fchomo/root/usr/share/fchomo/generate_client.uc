@@ -121,18 +121,7 @@ function parse_filter(cfg) {
 		return cfg;
 }
 
-function get_proxynode(cfg) {
-	if (isEmpty(cfg))
-		return null;
-
-	const label = uci.get(uciconf, cfg, 'label');
-	if (isEmpty(label))
-		die(sprintf("%s's label is missing, please check your configuration.", cfg));
-	else
-		return label;
-}
-
-function get_proxygroup(cfg) {
+function get_proxy(cfg) {
 	if (isEmpty(cfg))
 		return null;
 
@@ -164,7 +153,7 @@ function get_nameserver(cfg, detour) {
 			});
 		} else
 			push(servers, replace(dnsservers[k]?.address || '', /#detour=([^&]+)/, (m, c1) => {
-				return '#' + urlencode(get_proxygroup(detour || c1));
+				return '#' + urlencode(get_proxy(detour || c1));
 			}));
 	}
 
@@ -177,7 +166,7 @@ function parse_entry(cfg) {
 
 	let rule = json(cfg);
 	if (rule.detour)
-		rule.detour = get_proxygroup(rule.detour);
+		rule.detour = get_proxy(rule.detour);
 
 	function _payloadStrategy(payload) {
 		// LOGIC_TYPE,((payload1),(payload2))
@@ -225,7 +214,7 @@ uci.foreach(uciconf, ucichain, (cfg) => {
 		return;
 
 	dialerproxy[identifier] = {
-		detour: get_proxygroup(cfg.chain_tail_group) || get_proxynode(cfg.chain_tail)
+		detour: get_proxy(cfg.chain_tail_group) || get_proxy(cfg.chain_tail)
 	};
 });
 
@@ -270,11 +259,13 @@ config.tls = {
 /* API START */
 const api_port = uci.get(uciconf, uciapi, 'external_controller_port');
 const api_tls_port = uci.get(uciconf, uciapi, 'external_controller_tls_port');
+const api_routing_mark = uci.get(uciconf, uciapi, 'external_controller_routing_mark');
 /* API settings */
 config["external-controller-cors"] = {
 	"allow-origins": uci.get(uciconf, uciapi, 'external_controller_cors_allow_origins') || ['*'],
 	"allow-private-network" : (uci.get(uciconf, uciapi, 'external_controller_cors_allow_private_network') === '0') ? false : true
 };
+config["external-controller-routing-mark"] = strToInt(api_routing_mark) || null;
 config["external-controller"] = api_port ? '[::]:' + api_port : null;
 config["external-controller-tls"] = api_tls_port ? '[::]:' + api_tls_port : null;
 config["external-doh-server"] = uci.get(uciconf, uciapi, 'external_doh_server');
@@ -349,7 +340,7 @@ uci.foreach(uciconf, uciinbd, (cfg) => {
 	if (cfg.enabled === '0')
 		return;
 
-	push(config.listeners, parseListener(cfg, true, get_proxygroup(cfg.proxy)));
+	push(config.listeners, parseListener(cfg, true, get_proxy(cfg.proxy)));
 });
 /* Tun settings */
 if (match(proxy_mode, /tun/))
@@ -397,6 +388,7 @@ config.dns = {
 	enable: true,
 	"prefer-h3": false,
 	listen: '[::]:' + (uci.get(uciconf, ucidns, 'dns_port') || '7853'),
+	"listen-routing-mark": strToInt(uci.get(uciconf, ucidns, 'routing_mark')) || null,
 	ipv6: (uci.get(uciconf, ucidns, 'ipv6') === '0') ? false : true,
 	"enhanced-mode": 'redir-host',
 	"use-hosts": true,
@@ -490,14 +482,16 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		"routing-mark": strToInt(cfg.routing_mark) || null,
 		"ip-version": cfg.ip_version,
 
-		/* HTTP / SOCKS / Shadowsocks / VMess / VLESS / Trojan / hysteria2 / TUIC / SSH / WireGuard / Masque */
+		/* Rematch */
+		"target-rematch-name": cfg.target_rematch_name,
+		"target-sub-rule": cfg.target_sub_rule,
+
+		/* HTTP / SOCKS / Shadowsocks / VMess / VLESS / Trojan / hysteria2 / TUIC / WireGuard / Masque */
 		username: cfg.username,
 		uuid: cfg.vmess_uuid || cfg.uuid,
 		cipher: cfg.vmess_chipher || cfg.shadowsocks_chipher,
 		password: cfg.shadowsocks_password || cfg.password,
 		headers: cfg.headers ? json(cfg.headers) : null,
-		"private-key": cfg.masque_private_key || cfg.wireguard_private_key || cfg.ssh_priv_key,
-		"public-key": cfg.masque_endpoint_public_key || cfg.wireguard_peer_public_key,
 		ip: cfg.masque_ip || cfg.wireguard_ip,
 		ipv6: cfg.masque_ipv6 || cfg.wireguard_ipv6,
 		mtu: strToInt(cfg.masque_mtu ?? cfg.wireguard_mtu) || null,
@@ -576,10 +570,10 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		"udp-over-stream": strToBool(cfg.tuic_udp_over_stream),
 		"udp-over-stream-version": cfg.tuic_udp_over_stream_version,
 		"max-udp-relay-packet-size": strToInt(cfg.tuic_max_udp_relay_packet_size) || null,
+		"fast-open": strToBool(cfg.tuic_fast_open),
 		"reduce-rtt": strToBool(cfg.tuic_reduce_rtt),
 		"heartbeat-interval": strToInt(cfg.tuic_heartbeat) || null,
 		"request-timeout": strToInt(cfg.tuic_request_timeout) || null,
-		// @"fast-open": true,
 		"max-open-streams": strToInt(cfg.tuic_max_open_streams) || null,
 
 		/* Trojan */
@@ -602,8 +596,11 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		"packet-encoding": cfg.vmess_packet_encoding,
 		encryption: cfg.vless_encryption === '1' ? cfg.vless_encryption_encryption : null,
 
+		/* Masque */
+		network: cfg.masque_network || null,
+
 		/* TrustTunnel */
-		"health-check": cfg.trusttunnel_health_check === '0' ? false : true,
+		"health-check": cfg.type === 'trusttunnel' ? (cfg.trusttunnel_health_check === '0' ? false : true) : null,
 		quic: strToBool(cfg.trusttunnel_quic),
 
 		/* WireGuard */
@@ -630,6 +627,7 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		"udp-over-tcp": strToBool(cfg.uot),
 		"udp-over-tcp-version": cfg.uot_version,
 
+		/* SSH / WireGuard / Masque */
 		/* TLS fields */
 		tls: (cfg.type in ['trojan', 'anytls', 'hysteria', 'hysteria2', 'tuic', 'trusttunnel']) ? null : strToBool(cfg.tls),
 		"disable-sni": strToBool(cfg.tls_disable_sni),
@@ -638,7 +636,8 @@ uci.foreach(uciconf, ucinode, (cfg) => {
 		alpn: cfg.tls_alpn, // Array
 		"skip-cert-verify": strToBool(cfg.tls_skip_cert_verify),
 		certificate: cfg.tls_cert_path, // mTLS
-		"private-key": cfg.tls_key_path, // mTLS
+		"private-key": cfg.masque_private_key || cfg.wireguard_private_key || cfg.ssh_priv_key || cfg.tls_key_path, // mTLS/SSH/WireGuard/Masque
+		"public-key": cfg.masque_endpoint_public_key || cfg.wireguard_peer_public_key, // WireGuard/Masque
 		"client-fingerprint": cfg.tls_client_fingerprint,
 		"ech-opts": cfg.tls_ech === '1' ? {
 			enable: true,
@@ -738,14 +737,14 @@ uci.foreach(uciconf, ucipgrp, (cfg) => {
 		name: cfg.label,
 		type: cfg.type,
 		proxies: [
-			...map(cfg.groups || [], cfg => get_proxygroup(cfg)),
-			...map(cfg.proxies || [], cfg => get_proxynode(cfg))
+			...map(cfg.groups || [], cfg => get_proxy(cfg)),
+			...map(cfg.proxies || [], cfg => get_proxy(cfg))
 		],
 		use: cfg.use,
 		"include-all": strToBool(cfg.include_all),
 		"include-all-proxies": strToBool(cfg.include_all_proxies),
 		"include-all-providers": strToBool(cfg.include_all_providers),
-		"empty-fallback": cfg.empty_fallback ? get_proxygroup(cfg.empty_fallback) : null,
+		"empty-fallback": cfg.empty_fallback ? get_proxy(cfg.empty_fallback) : null,
 		// Url-test fields
 		tolerance: (cfg.type === 'url-test') ? strToInt(cfg.tolerance) ?? 150 : null,
 		// Load-balance fields
@@ -786,7 +785,8 @@ uci.foreach(uciconf, uciprov, (cfg) => {
 			url: cfg.url,
 			"size-limit": bytesizeToByte(cfg.size_limit) || null,
 			interval: (cfg.type === 'http') ? durationToSecond(cfg.interval) ?? 86400 : null,
-			proxy: get_proxygroup(cfg.proxy),
+			proxy: get_proxy(cfg.proxy),
+			"age-secret-key": cfg.age_private_key,
 			header: cfg.header ? json(cfg.header) : null,
 			/* Health fields */
 			"health-check": cfg.health_enable === '0' ? {enable: false} : {
@@ -843,7 +843,7 @@ uci.foreach(uciconf, ucirule, (cfg) => {
 			"path-in-bundle": cfg.path_in_bundle,
 			"size-limit": bytesizeToByte(cfg.size_limit) || null,
 			interval: (cfg.type === 'http') ? durationToSecond(cfg.interval) ?? 259200 : null,
-			proxy: get_proxygroup(cfg.proxy),
+			proxy: get_proxy(cfg.proxy),
 			header: cfg.header ? json(cfg.header) : null
 		})
 	};

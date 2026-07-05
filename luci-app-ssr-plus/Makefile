@@ -3,8 +3,8 @@ include $(TOPDIR)/rules.mk
 LUCI_TITLE:=luci-app-ssr-plus
 LUCI_PKGARCH:=all
 PKG_NAME:=luci-app-ssr-plus
-PKG_VERSION:=193
-PKG_RELEASE:=24
+PKG_VERSION:=196
+PKG_RELEASE:=40
 
 PKG_CONFIG_DEPENDS:= \
 	CONFIG_PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy \
@@ -34,15 +34,17 @@ LUCI_DEPENDS:= \
 	+jq +ip-full +lua-neturl +libuci-lua +microsocks +ipt2socks +lyaml \
 	+resolveip +curl +nping +unzip +xz-utils \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Xray:xray-core \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_Xray:coreutils-timeout \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_Http_Proxy:3proxy \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo:mihomo \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo:v2ray-geoip \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geoip \
+	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geosite \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_ChinaDNS_NG:chinadns-ng \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_MosDNS:mosdns \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Shadow_TLS:shadow-tls \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Kcptun:kcptun-client \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_NaiveProxy:naiveproxy \
-	+PACKAGE_$(PKG_NAME)_INCLUDE_Http_Proxy:3proxy \
-	+PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo:mihomo \
-	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geoip \
-	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geosite \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Client:shadowsocks-rust-sslocal \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Rust_Server:shadowsocks-rust-ssserver \
 	+PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Simple_Obfs:simple-obfs-client \
@@ -61,6 +63,7 @@ choice
 
 config PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy
 	bool "Iptables Transparent Proxy"
+	depends on !PACKAGE_firewall4
 	select PACKAGE_dnsmasq_full_ipset
 	select PACKAGE_ipset
 	select PACKAGE_iptables
@@ -73,6 +76,7 @@ config PACKAGE_$(PKG_NAME)_Iptables_Transparent_Proxy
 
 config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
 	bool "Nftables Transparent Proxy"
+	depends on PACKAGE_firewall4
 	select PACKAGE_dnsmasq_full_nftset
 	select PACKAGE_nftables
 	select PACKAGE_kmod-nft-socket
@@ -104,7 +108,6 @@ endchoice
 
 choice
 	prompt "V2ray-core Selection"
-	default PACKAGE_$(PKG_NAME)_INCLUDE_Xray
 	default PACKAGE_$(PKG_NAME)_INCLUDE_NONE_V2RAY
 
 	config PACKAGE_$(PKG_NAME)_INCLUDE_NONE_V2RAY
@@ -129,7 +132,7 @@ config PACKAGE_$(PKG_NAME)_INCLUDE_Http_Proxy
 config PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo
 	bool "Include Mihomo (Clash Support)"
 	depends on aarch64||arm||i386||loongarch64||riscv64||x86_64
-	default y if aarch64||i386||loongarch64||riscv64||x86_64
+	default y if aarch64||arm||i386||loongarch64||riscv64||x86_64
 
 config PACKAGE_$(PKG_NAME)_INCLUDE_GeoData
 	bool "Include GeoData (GeoIP and GeoSite)"

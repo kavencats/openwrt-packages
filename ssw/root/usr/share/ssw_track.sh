@@ -1,11 +1,8 @@
 #!/bin/sh
 
 # SIM slot switcher for HuastLink HC-G60 or ZBT-WE2806-A
-# or similar CPE OpenWrt-routers
-# by Konstantine Shevlakov at <shevlakov@132lan.ru> 2025
-# Audited & fixed 2026
-
-NODE="SW SIM"
+# or similiar cpe OpenWrt-routers
+# by Konstantine Shevlakov at <shevlakov@132lan.ru> 2025-2026
 
 # config file stored in /etc/config/ssw
 # define gpios in /etc/config/system
@@ -34,130 +31,81 @@ NODE="SW SIM"
 #        option gpio 'sim'
 #        option value '1'
 
+# Schedule switch section example /etc/config/ssw:
+#
+# config schedule 'schedule'
+#        option enable '1'
+#        option time_on 'HH:MM'      # time to switch to reserve SIM (24h format)
+#        option duration '60'         # minutes until revert to default SIM (0 = no revert)
+#        option apn 'internet'        # APN for reserve SIM during schedule switch
+#        option period 'daily'        # daily | interval | weekly
+#        option period_days '3'       # for period=interval: every N days
+#        option weekday '1'           # for period=weekly: 0=Sun 1=Mon … 6=Sat
 
-. /lib/functions.sh
 
-# Callback failover section
-_load_failover(){
-	config_get enable    "$1" enable    ""
-	config_get interval  "$1" interval  60
-	config_get revert    "$1" revert    ""
-	config_get rsrp      "$1" rsrp      ""
-	config_get times_rsrp "$1" times_rsrp 5
-	config_get apn1      "$1" apn1      ""
-	config_get apn2      "$1" apn2      ""
-}
+NODE="SW SIM"
 
-# Callback sections modem / sim (gpio type)
-_load_gpio(){
-	local _gpio _value
-	config_get _gpio  "$1" gpio  ""
-	config_get _value "$1" value ""
-	eval "${1}_gpio=\"$_gpio\""
-	eval "${1}_value=\"$_value\""
-}
-
-# Get Variables — update for every cycle
+# Get Variables
 get_vars(){
-	reset_cb
-	config_load ssw
-	config_foreach _load_failover failover
-	config_foreach _load_gpio     modem
-	config_foreach _load_gpio     sim
+	for v in enable interval revert rsrp times_rsrp apn1 apn2; do
+		eval $v=$(uci -q get ssw.failover.${v} 2>/dev/null)
+	done
+	for d in modem sim; do
+		for s in gpio value; do
+			eval "${d}_${s}=$(uci -q get ssw.${d}.${s} 2>/dev/null)"
+		done
+	done
+	[ -n "$interval" ] || interval=60
+	[ -n "$times_rsrp" ] || times_rsrp=5
+
 }
 
 # SIM Switch
 sw_sim(){
-	case "$cur_sim" in
+	case $cur_sim in
 		0) next_sim=1 ;;
 		1) next_sim=0 ;;
-		*)
-			logger -t "$NODE" "ERROR: cur_sim has unexpected value '$cur_sim'. Aborting sw_sim."
-			return 1
-			;;
 	esac
 
-	echo "0" > /sys/class/gpio/"$modem_gpio"/value
-	echo "$next_sim" > /sys/class/gpio/"$sim_gpio"/value
+	echo "0" > /sys/class/gpio/$modem_gpio/value
+	echo "$next_sim" > /sys/class/gpio/$sim_gpio/value
 
 	if [ "$modem_value" = "1" ]; then
 		sleep 2
-		echo "1" > /sys/class/gpio/"$modem_gpio"/value
+		echo "1" > /sys/class/gpio/$modem_gpio/value
 		if [ -x /etc/init.d/smstools3 ]; then
 			/etc/init.d/smstools3 restart
 		fi
 	fi
-}
-
-# Revert rule switch
-sw_rule(){
-	if [ -f /tmp/ssw.vars ]; then
-		. /tmp/ssw.vars
-	fi
-	# Revert SIM card to default slot
-	if [ "$cur_sim" -ne "$sim_value" ]; then
-		if [ "$(date +%s)" -gt "$SWDATE" ]; then
-			logger -t "$NODE" "Revert to default SIM slot with $apn"
-			sw_sim
-		fi
-	fi
+	set > /tmp/apn.ssw
 }
 
 # Check interface state via mwan3
 monitor_mwan3(){
-	iface=$(uci show network | awk -F'[.]' '/devices/{print $2}' | tail -1)
-	# Check link status
-	if [ -r "/tmp/run/mwan3/iface_state/$iface" ]; then
-		link_status=$(grep -c online "/tmp/run/mwan3/iface_state/$iface" || echo 0)
+	iface=$(uci show network | awk -F [.] '/devices/{print $2}')
+	if [ -r /tmp/run/mwan3/iface_state/$iface ]; then
+		link_status=$(cat /tmp/run/mwan3/iface_state/$iface | grep online | wc -l)
 	else
-		# Disable track link via mwan3
 		link_status=1
 	fi
 }
 
-check_signal(){
-	local gen="$1" signal_json="$2"
-	local metric value
-
-	case "$gen" in
-		lte|5g) metric="rsrp" ;;
-		3g)     metric="rscp" ;;
-		*)
-			logger -t "$NODE" "check_signal: unknown generation '$gen'"
-			return 1
-			;;
-	esac
-
-	value=$(echo "$signal_json" \
-		| jsonfilter -e "@[\"modem\"][*][\"${gen}\"][\"${metric}\"]" 2>/dev/null \
-		| awk '{printf "%.0f\n", $1}')
-
-	[ -n "$value" ] && echo "$value"
-}
-
-# RSRP/RSCP average value by modemmanager. Enable signal monitor!
+# RSRP average value by modemmanager. Enable signal monitor!
 monitor_rsrp(){
-	local device SIGNAL CRSRP
-
-	device="$(uci show network | awk -F'[=]' '/devices/{gsub("'\''",""); print $2}' | tail -1)"
-	SIGNAL="$(mmcli -J -m "$device" --signal-get 2>/dev/null)"
-
-	for gen in lte 5g 3g; do
-		CRSRP=$(check_signal "$gen" "$SIGNAL")
-		[ -n "$CRSRP" ] && break
-	done
-
-	if [ -n "$CRSRP" ] && [ "$CRSRP" -ne 0 ]; then
-		echo "$CRSRP" >> /tmp/ssw_rsrp.var
+	device="$(uci show network | awk -F [=] '/devices/{gsub("'\''","");print $2}')"
+	SIGNAL="$(mmcli -J -m $device --signal-get)"
+	CRSRP=$(echo "$SIGNAL" | jsonfilter -e '@["modem"][*]["lte"]["rsrp"]' | awk '{printf "%.0f\n", $1}')
+	if ! [ $CRSRP ]; then
+		CRSRP=$(echo "$SIGNAL" | jsonfilter -e '@["modem"][*]["5g"]["rsrp"]' | awk '{printf "%.0f\n", $1}')
 	fi
 
+	if [ -n "$CRSRP" ] && [ "$CRSRP" -ne "0" ]; then
+		echo $CRSRP >> /tmp/ssw_rsrp.var
+	fi
 	if [ "$cnt" -eq "$times_rsrp" ]; then
-		if [ -s /tmp/ssw_rsrp.var ]; then
-			RSRP=$(awk '{sum+=$1} END { printf "%.0f\n", sum/NR }' /tmp/ssw_rsrp.var)
-		fi
-		: > /tmp/ssw_rsrp.var
-
-		if [ -n "$RSRP" ] && [ "$RSRP" -lt "$rsrp" ]; then
+		RSRP=$(awk '{sum+=$1} END { printf "%.0f\n", sum/NR }' /tmp/ssw_rsrp.var)
+		cat /dev/null > /tmp/ssw_rsrp.var
+		if [ $RSRP -lt $rsrp ]; then
 			mon_rsrp=0
 		else
 			mon_rsrp=1
@@ -169,74 +117,55 @@ monitor_rsrp(){
 reload_iface(){
 	[ "$iface" ] && {
 		for i in $iface; do
-			ifup "$i"
+			ifup $i
 		done
 	}
 }
 
-cnt=0
-
+# Stuff
+cnt=1
 while true; do
 	get_vars
-	sleep "$interval"
+	sleep $interval
 
 	if [ "$enable" = "1" ]; then
-		cur_sim=$(cat /sys/class/gpio/"$sim_gpio"/value)
-
-		cnt=$(( cnt + 1 ))
+		cur_sim=$(cat /sys/class/gpio/$sim_gpio/value)
 		monitor_rsrp
 		monitor_mwan3
-
 		if [ "$cnt" -eq "$times_rsrp" ]; then
-			if [ "$link_status" = "0" ] || [ "$mon_rsrp" = "0" ]; then
+			if [ "$link_status" = "0" -o "$mon_rsrp" = "0" ]; then
 
 				if [ "$sim_value" -eq "$cur_sim" ]; then
 					apn=$apn2
 				else
 					apn=$apn1
 				fi
-
-				iface=$(uci show network | awk -F'[.]' '/devices/{gsub("'\''",""); print $2}' | tail -1)
-
-				if [ -n "$RSRP" ]; then
+				iface=$(uci show network | awk -F [.] '/devices/{gsub("'\''","");print $2}' | tail -1)
+				if [ $RSRP ]; then
 					if [ "$mon_rsrp" = "0" ]; then
-						logger -t "$NODE" "Modem interface: $iface average RSRP=${RSRP} dBm. Min. value ${rsrp} dBm."
+						logger -t "$NODE" "Modem interface: $iface is average RSRP= ${RSRP} dBm. Min. value ${rsrp} dBm."
 					fi
 					if [ "$link_status" = "0" ]; then
-						logger -t "$NODE" "Modem interface: $iface lost connectivity."
+						logger -t "$NODE" "Modem interface: $iface is loss connectivity"
 					fi
 				else
-					logger -t "$NODE" "WARNING: RSRP value not available. Check 'Refresh signal' option of modem interface!"
+					logger -t "$NODE" "WARNING: RSRP value not exist. Please check \"Resfesh signal\" option of modem interface!"
 				fi
-
-				if [ "${#apn}" -gt 0 ]; then
-					uci set network."$iface".apn="$apn"
+				if [ "${#apn}" -gt "0" ]; then
+					uci set network.$iface.apn="$apn"
 					logger -t "$NODE" "Switch SIM-card slot with APN: $apn"
 				else
-					logger -t "$NODE" "WARNING: APN not defined. Switching SIM-card slot with default APN."
-					uci set network."$iface".apn="internet"
+					logger -t "$NODE" "WARNING: APN not defined. Switch SIM-card slot with default APN."
+					uci set network.$iface.apn="internet"
 				fi
 
 				uci commit network
-				reload_config
-
-				if [ "$revert" = "1" ]; then
-					if [ "$cur_sim" -eq "$sim_value" ]; then
-						FBT=${FBT:=$(( (interval + times_rsrp) * 2 ))}
-						FBT=$(( FBT * 2 ))
-						SWDATE=$(( $(date +%s) + FBT ))
-						printf 'FBT=%s\nSWDATE=%s\n' "$FBT" "$SWDATE" > /tmp/ssw.vars
-						logger -t "$NODE" "Back to default SIM-slot after $(date -d @"${SWDATE}")"
-					fi
-				fi
-
+				reload_config network
 				sw_sim && sleep 20 && reload_iface &
-
-			elif [ "$revert" = "1" ]; then
-				sw_rule && sleep 20 && reload_iface &
 			fi
-
-			cnt=1
+			cnt=0
+		else
+			cnt=$(($cnt+1))
 		fi
 	fi
 done

@@ -75,6 +75,40 @@ local function base64Encode(text)
 	end
 end
 
+local function parse_realm_uri(uri)
+	uri = trim(uri)
+	if uri == "" then return nil end
+	-- realm[+http]://token@server/realm_id?query
+	local scheme = (uri:match("^realm%+http://") and "realm+http") or (uri:match("^realm://") and "realm")
+	if not scheme then return nil end
+	uri = uri:gsub("^realm%+http://", ""):gsub("^realm://", "")
+	local token, server_url, realm_id, query = uri:match("^([^@]+)@([^/]+)/([^?]*)%??(.*)$")
+	if not token or not server_url or not realm_id then return nil end
+	realm_id = realm_id:gsub("/+$", "")
+	local address, port = server_url:match("^%[([^%]]+)%]:(%d+)$") --ipv6:port
+	if not address then
+		address, port = server_url:match("^([^:]+):(%d+)$") --ipv4[domain]:port
+	end
+	address = address or server_url:match("^%[([^%]]+)%]$") or server_url
+	port = tonumber(port) or (scheme == "realm+http" and 80 or 443)
+	local realm = {
+		scheme = scheme,
+		token = token,
+		server_url = server_url,
+		address = address,
+		port = port,
+		realm_id = realm_id
+	}
+	-- 解析 query 中的 stun=
+	local stun_servers
+	for v in (query or ""):gmatch("[Ss][Tt][Uu][Nn]=([^&]+)") do
+		stun_servers = stun_servers or {}
+		stun_servers[#stun_servers + 1] = v
+	end
+	realm.stun_servers = stun_servers
+	return realm
+end
+
 -- 获取 Xray 版本号
 if is_finded("xray") then
 	local version = luci.sys.exec("xray version 2>&1")
@@ -321,6 +355,10 @@ m.on_after_save = function(self)
 	end
 end
 
+local server_header = Template("/shadowsocksr/server_header")
+server_header.section = sid
+m:append(server_header)
+
 -- [[ Servers Setting ]]--
 s = m:section(NamedSection, sid, "servers")
 s.anonymous = true
@@ -343,7 +381,7 @@ if has_mihomo then
 	o:value("ss", translate("ShadowSocks"))
 end
 if has_ss_rust then
-	o:value("ss-rust", translate("ShadowSocks"))
+	o:value("ss-rust", translate("ShadowSocks-Rust"))
 end
 if is_finded("naive") then
 	o:value("naiveproxy", translate("NaiveProxy"))
@@ -416,6 +454,9 @@ if is_finded("xray") then
 end
 if is_finded("xray") then
 	o:value("hysteria2", translate("Hysteria2"))
+end
+if is_finded("mihomo") then
+	o:value("snell", translate("Snell"))
 end
 o:value("socks", translate("Socks"))
 o:value("http", translate("HTTP"))
@@ -499,6 +540,11 @@ o:depends({type = "v2ray", v2ray_protocol = "http", auth_enable = true})
 o:depends({type = "v2ray", v2ray_protocol = "socks", socks_ver = "5", auth_enable = true})
 o:depends({type = "v2ray", v2ray_protocol = "shadowsocks"})
 o:depends({type = "v2ray", v2ray_protocol = "trojan"})
+
+o = s:option(Value, "snell_psk", translate("Snell PSK"))
+o.password = true
+o.rmempty = true
+o:depends({type = "v2ray", v2ray_protocol = "snell"})
 
 o = s:option(ListValue, "encrypt_method", translate("Encrypt Method"))
 for _, v in ipairs(encrypt_methods) do
@@ -605,6 +651,12 @@ end
 
 o = s:option(Value, "hysteria2_realm_url", translate("Realm URL"), translate("Example:") .. "realm://public@realm.hy2.io/your-realm-name")
 o:depends("hysteria2_realms", true)
+o.validate = function(self, value)
+	value = trim(value)
+	local realm = parse_realm_uri(value)
+	if realm then return value end
+	return nil, translate("Invalid Realm URL.")
+end
 
 o = s:option(DynamicList, "hysteria2_realm_stun", translate("Realm STUN"))
 o.default = { "stun.sip.us:3478", "stun.nextcloud.com:3478", "global.stun.twilio.com:3478" }
@@ -659,13 +711,27 @@ o:depends("type", "hysteria2")
 o.rmempty = true
 o.default = "0"
 
-o = s:option(Value, "obfs_type", translate("Obfuscation Type"))
+o = s:option(ListValue, "obfs_type", translate("Obfuscation Type"))
 o:value("", translate("Disable"))
 o:value("salamander")
 o:value("gecko")
 o.rmempty = true
 o:depends({type = "hysteria2", flag_obfs = true})
 o:depends({type = "v2ray", v2ray_protocol = "hysteria2", flag_obfs = true})
+
+o = s:option(Value, "obfs_MinPacketSize", translate("Gecko Packet Size (min)"))
+o.datatype = "uinteger"
+o.placeholder = "512"
+o.default = "512"
+o:depends({type = "hysteria2", flag_obfs = true, obfs_type = "gecko"})
+o:depends({type = "v2ray", v2ray_protocol = "hysteria2", flag_obfs = true, obfs_type = "gecko"})
+
+o = s:option(Value, "obfs_MaxPacketSize", translate("Gecko Packet Size (max)"))
+o.datatype = "uinteger"
+o.placeholder = "1200"
+o.default = "1200"
+o:depends({type = "hysteria2", flag_obfs = true, obfs_type = "gecko"})
+o:depends({type = "v2ray", v2ray_protocol = "hysteria2", flag_obfs = true, obfs_type = "gecko"})
 
 o = s:option(Value, "salamander", translate("Obfuscation Password"))
 o.password = true
@@ -945,6 +1011,28 @@ o:value("5", "Socks5")
 o.rmempty = true
 o.default = "5"
 o:depends({type = "v2ray", v2ray_protocol = "socks"})
+
+o = s:option(ListValue, "snell_version", translate("Snell Version"))
+o:value("1", "v1")
+o:value("2", "v2")
+o:value("3", "v3")
+o:value("4", "v4")
+o:value("5", "v5")
+o.default = "4"
+o.rmempty = true
+o:depends({type = "v2ray", v2ray_protocol = "snell"})
+
+o = s:option(ListValue, "snell_obfs", translate("Snell Obfs"))
+o:value("", translate("Disable"))
+o:value("http", "HTTP")
+o:value("tls", "TLS")
+o.default = ""
+o.rmempty = true
+o:depends({type = "v2ray", v2ray_protocol = "snell"})
+
+o = s:option(Value, "snell_obfs_host", translate("Snell Obfs Host"))
+o.rmempty = true
+o:depends({type = "v2ray", v2ray_protocol = "snell"})
 
 -- 传输协议
 o = s:option(ListValue, "transport", translate("Transport"))
@@ -1510,14 +1598,18 @@ o.description = translate("If true, allowss insecure connection at TLS client, e
 if xray_version_val >= 260131 then
 	-- Xray 版本大于等于 26.1.31
 	-- [[ Xray TLS pinSHA256 ]] --
-	o = s:option(Value, "tls_CertSha", translate("TLS Chain Fingerprint (SHA256)"), translate("Once set, connects only when the server’s chain fingerprint matches."))
+	o = s:option(Value, "tls_CertSha", translate("TLS Chain Fingerprint (SHA256)"))
 	o.rmempty = true
 	o:depends({type = "v2ray", tls = true})
+	o.description = translate("Once set, connects only when the server’s chain fingerprint matches.") ..
+			string.format("<a href='javascript:void(0)' onclick='javascript:fetchCertSha256(this)'>%s</a>", "→ " .. translate("Fetch Manually"))
 
 	-- [[ Xray TLS verify leaf certificate name ]] --
-	o = s:option(Value, "tls_CertByName", translate("TLS Certificate Name (CertName)"), translate("TLS is used to verify the leaf certificate name."))
+	o = s:option(Value, "tls_CertByName", translate("TLS Certificate Name (CertName)"))
 	o.rmempty = true
 	o:depends({type = "v2ray", tls = true})
+	o.description = translate("TLS is used to verify the leaf certificate name.") ..
+			string.format("<a href='javascript:void(0)' onclick='javascript:fetchCertByName(this)'>%s</a>", "→ " .. translate("Fetch Manually"))
 end
 
 -- [[ Hysteria2 TLS pinSHA256 ]] --

@@ -33,7 +33,6 @@ const BACKENDS = {
 		log: '/var/log/dae/dae.log',
 		pkg: 'dae',
 		config: '/etc/dae/config.dae',
-		example: '/etc/dae/example.dae',
 		hasWebUI: false,
 		useNetns: false
 	}
@@ -75,9 +74,12 @@ function detectInstalledBackends() {
 }
 
 function detectRunning() {
+	/* pidof matches the program name exactly and, unlike busybox `pgrep -x`
+	   (which compares the full cmdline `/usr/bin/dae run …` and never hits),
+	   reliably tells dae from daed without substring false positives. */
 	return Promise.all([
-		execOk('/usr/bin/pgrep', ['-x', 'dae']),
-		execOk('/usr/bin/pgrep', ['-x', 'daed'])
+		execOk('/bin/pidof', ['dae']),
+		execOk('/bin/pidof', ['daed'])
 	]).then(function(r) {
 		return { dae: r[0], daed: r[1] };
 	});
@@ -99,7 +101,8 @@ function setActiveBackend(name) {
 			return fs.write('/etc/config/daede', '');
 	}).then(function() { return fs.exec('/sbin/uci', ['set', 'daede.config=daede']); })
 		.then(function() { return fs.exec('/sbin/uci', ['set', 'daede.config.active_backend=' + name]); })
-		.then(function() { return fs.exec('/sbin/uci', ['commit', 'daede']); });
+		.then(function() { return fs.exec('/sbin/uci', ['commit', 'daede']); })
+		.then(function() { uci.set('daede', 'config', 'active_backend', name); });
 }
 
 function detectBackend() {
