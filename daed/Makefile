@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.06.14
-PKG_RELEASE:=17
+PKG_VERSION:=2026.07.08
+PKG_RELEASE:=21
 
-PKG_SOURCE:=daed-src-2026.06.14-4e215048068a.tar.gz
+PKG_SOURCE:=daed-src-2026.07.08-71b818ad193b.tar.gz
 PKG_SOURCE_URL:=https://github.com/kenzok8/openwrt-daede/releases/download/daed-src
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
 PKG_HASH:=skip
@@ -40,7 +40,7 @@ GO_PKG_LDFLAGS:= \
 GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/db.AppName=$(PKG_NAME) \
 	$(GO_PKG)/db.AppVersion=$(PKG_VERSION)
-GO_PKG_TAGS:=embedallowed,trace
+GO_PKG_TAGS:=embedallowed,trace,timetzdata
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk

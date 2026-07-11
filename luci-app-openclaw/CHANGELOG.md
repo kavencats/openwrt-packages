@@ -4,6 +4,77 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [2.0.11] - 2026-07-10
+
+### 修复微信扫码后 Gateway 丢失插件
+
+- 微信安装、升级和登录前置检查改为使用官方 `plugins enable openclaw-weixin`、`plugins registry --refresh` 和 `plugins inspect` 完成闭环。
+- 只有官方 npm 安装记录、SQLite 注册表和微信 channel capability 全部验证通过后，LuCI 才返回安装成功。
+- 启动自愈不再删除 OpenClaw 官方生成的 `plugins.entries.openclaw-weixin`，并在 Gateway 启动前以 `openclaw` 用户刷新和验证注册表。
+- 修复扫码认证已保存，但 Gateway 重启后只加载 `memory-core` 并报 `invalid channels.start channel` 的问题。
+
+### 验证
+
+- 增加插件启用、SQLite 注册表刷新、加载能力校验和冷启动自愈的契约断言。
+
+---
+
+## [2.0.10] - 2026-07-08
+
+### 修复微信渠道配对
+
+- 适配 OpenClaw 2026.6.11 SQLite `installed_plugin_index`，微信安装与升级改用官方 `openclaw plugins install --pin` 写入插件索引。
+- 启动时检测旧 npm 直装目录并一次性迁移到官方插件索引，同时补齐 `plugins.allow` 和 `channels.openclaw-weixin.enabled`。
+- 微信安装、升级和登录流程增加 `https://ilinkai.weixin.qq.com` 连通性检查，日志直接显示 HTTP、TLS 或 timeout 结果。
+- 兼容没有 `su` / `runuser` 的 OpenWrt 固件，微信安装、升级、登录和下线改用 `start-stop-daemon` 兜底以 `openclaw` 用户执行。
+- 微信安装网络探测优先使用 `curl`，避免低内存/精简 musl 固件上 Node `fetch` 触发 undici Wasm OOM。
+- 不再只用 npm 直装并写入已废弃的 `plugins.installs`，避免扫码成功后配置保存导致插件注册丢失。
+- 微信插件安装/升级不再预先停止 Gateway，避免反复安装触发 procd crash-loop。
+- LuCI 状态页和 `status_service` 增强 procd 状态识别，能区分真实启动中、stale pidfile 和 crash-loop 抑制，不再误显示“正在启动”。
+- 微信登录前补充 Node、python3、插件目录、账号状态目录和配置写权限检查，并清理残留登录进程与旧二维码状态。
+- 登录失败时在 LuCI 页面展示真实日志详情，不再只显示“登录失败”。
+- 二维码链接提取更稳，页面明确提示“点击链接后用微信扫码”。
+- README 补充微信插件正确配对流程和常见失败原因。
+
+### 修复权限混乱
+
+- 新增统一权限修复工具 `openclaw-permissions.sh`。
+- 避免把整个 `OC_DATA` 或 `OC_STATE_DIR` 递归改成 `openclaw`。
+- `npm/projects` 及插件源码保持 `openclaw` 可写，匹配官方 managed npm generation 生命周期。
+- retained npm generation 目录保持可清理，修复 Gateway 清理旧 generation 时的 `EACCES`。
+- legacy `extensions` / `archived-extensions` 保持 root-owned，降低 OpenClaw 插件安全检查误报风险。
+
+### 更新一万AI分享粉丝专享 API
+
+- `gpt-5.5` 默认上下文声明调整为 1,000,000 tokens，单次请求的实际可用上限仍以上游 API 为准。
+
+### 修复检测升级
+
+- “快捷操作 → 检测升级”改为语义版本比较，只在远端版本真正高于当前版本时提示升级。
+- 本地版本高于 GitHub latest 时不再误判为可升级。
+- 已实测旧版 `2.0.8` 可通过 LuCI 检测并一键升级到 `2.0.9`，升级日志返回成功且服务保持正常。
+
+### 修复干净安装启动失败
+
+- 修复首次安装后 `doctor --fix` 可能移除 `gateway.auth.token`，导致 Gateway 绑定 LAN 时因缺少认证直接退出，页面显示“启动失败，退出码 78”。
+- `doctor --fix` 执行环境补齐 `NODE_ICU_DATA` 和 Node/OpenClaw PATH，避免部分 musl 固件上配置迁移阶段触发 ICU/Unicode 正则错误。
+- Gateway 启动时增加 `OPENCLAW_GATEWAY_TOKEN` 环境变量兜底，确保 JSON 配置被迁移工具改写后仍能使用 UCI token 启动。
+- `.run` 安装器补齐运行依赖安装，避免精简固件缺少 GNU tar 时 Node.js `.tar.xz` 解压失败。
+- `openclaw-env setup` 改为先完整解压验证 Node.js，再替换正式目录；安装失败时保留已有运行目录，避免重装失败清空 `/opt/openclaw`。
+
+### 修复 Web 控制台连续对话
+
+- 启动 Gateway 前自动修补 OpenClaw 2026.6.11 的 WebChat 会话初始化冲突，避免 Web 控制台第一条能回答、第二条报 `reply session initialization conflicted`。
+- WebChat 会话不再因上一轮 assistant transcript 写入时间被误判为需要 rollover。
+- 当同一 sessionId 的 WebChat 写入在用户消息追加后发生 revision 变化时，自动合并当前 session entry 后继续提交。
+
+### 验证
+
+- 通过 shell / Node / Lua 语法检查。
+- 通过契约测试 `tests/test_openclaw_contracts.sh`。
+
+---
+
 ## [2.0.9] - 2026-07-04
 
 ### 修复微信 npm 插件注册

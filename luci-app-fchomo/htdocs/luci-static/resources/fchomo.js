@@ -242,7 +242,6 @@ const proxy_group_type = [
 	['fallback', _('Fallback')],
 	['url-test', _('URL test')],
 	['load-balance', _('Load balance')],
-	//['relay', _('Relay')], // Deprecated
 ];
 
 const routing_port_type = [
@@ -1542,25 +1541,13 @@ function loadLabelValues(uciconfig, sectiontype, options = {}) {
 		case 'rematch-name': {
 			const names = new Set();
 
-			for (const type of ['rules', 'subrules']) {
-				uci.sections(uciconfig, type, (res) => {
-					if (res.enabled === '0')
-						return;
-
-					try {
-						const payload =
-							JSON.parse(res?.entry?.trim() || '{}').payload || [];
-
-						for (const p of payload)
-							if (p.type === 'REMATCH-NAME')
-								names.add(p.factor);
-					} catch {}
-				});
-			}
+			uci.sections(uciconfig, 'node', (res) => {
+				if (res.enabled !== '0' && res.target_rematch_name)
+					names.add(res.target_rematch_name);
+			});
 
 			for (const name of names)
 				values.push([name, name]);
-
 			break;
 		}
 		default:
@@ -1763,7 +1750,7 @@ function textvalue2Value(section_id) {
 	let cval = this.cfgvalue(section_id);
 	let i = this.keylist.indexOf(cval);
 
-	return this.vallist[i];
+	return this.vallist[i] ?? cval;
 }
 
 function validateAuth(section_id, value) {

@@ -307,10 +307,6 @@ export function parseListener(cfg, isClient, label) {
 		/* Snell */
 		psk: cfg.snell_psk,
 		version: cfg.snell_version,
-		"obfs-opts": cfg.type === 'snell' ? {
-			mode: cfg.plugin_opts_obfsmode,
-			host: cfg.plugin_opts_host,
-		} : null,
 
 		/* Tuic */
 		"max-idle-time": durationToSecond(cfg.tuic_max_idle_time),
@@ -334,29 +330,51 @@ export function parseListener(cfg, isClient, label) {
 		target: cfg.tunnel_target,
 
 		/* Plugin fields */
-		...(cfg.plugin ? {
+		...(cfg.plugin ? (
+			cfg.plugin === 'obfs' ? (
 			// obfs-simple
-			"simple-obfs": cfg.plugin === 'obfs' ? {
-				enable: true,
-				mode: cfg.plugin_opts_obfsmode
-			} : null,
+				cfg.type === 'snell' ? {
+					// snell
+					"obfs-opts": {
+						mode: cfg.plugin_opts_obfsmode,
+						host: cfg.plugin_opts_host
+					}
+				} : {
+					// shadowsocks
+					"simple-obfs": {
+						enable: true,
+						mode: cfg.plugin_opts_obfsmode
+					}
+				}
+			) : cfg.plugin === 'shadow-tls' ? {
 			// shadow-tls
-			"shadow-tls": cfg.plugin === 'shadow-tls' ? {
-				enable: true,
-				version: strToInt(cfg.plugin_opts_shadowtls_version),
-				...(strToInt(cfg.plugin_opts_shadowtls_version) >= 3 ? {
-					users: [
-						{
-							name: 1,
-							password: cfg.plugin_opts_thetlspassword
-						}
-					],
-				} : { password: cfg.plugin_opts_thetlspassword }),
-				handshake: {
-					dest: cfg.plugin_opts_handshake_dest
-				},
-			} : null
-		} : {}),
+				"shadow-tls": {
+					enable: true,
+					version: strToInt(cfg.plugin_opts_shadowtls_version),
+					...(strToInt(cfg.plugin_opts_shadowtls_version) >= 3 ? {
+						users: [
+							{
+								name: 1,
+								password: cfg.plugin_opts_thetlspassword
+							}
+						],
+					} : { password: cfg.plugin_opts_thetlspassword }),
+					handshake: {
+						dest: cfg.plugin_opts_handshake_dest
+					}
+				}
+			} : cfg.plugin === 'restls' ? {
+			// restls
+				"res-tls": {
+					enable: true,
+					dest: cfg.plugin_opts_handshake_dest,
+					password: cfg.plugin_opts_thetlspassword,
+					"restls-script": cfg.plugin_opts_restls_script,
+					//"min-record-len": 0,
+					//proxy: ""
+				}
+			} : {}
+		) : {}),
 
 		/* Extra fields */
 		"congestion-controller": cfg.congestion_controller,
@@ -397,7 +415,17 @@ export function parseListener(cfg, isClient, label) {
 				"sc-max-each-post-bytes": strToInt(cfg.transport_xhttp_sc_max_each_post_bytes) || null,
 				// @其他的配置
 			} : null
-		} : {})
+		} : {}),
+
+		/* Multiplex fields */
+		"mux-option": cfg.smux_enabled === '1' ? {
+			padding: strToBool(cfg.smux_padding),
+			brutal: cfg.smux_brutal === '1' ? {
+				enabled: true,
+				up: strToInt(cfg.smux_brutal_up) || null, // Mbps
+				down: strToInt(cfg.smux_brutal_down) || null // Mbps
+			} : null
+		} : null
 	}
 };
 /* String universal end */

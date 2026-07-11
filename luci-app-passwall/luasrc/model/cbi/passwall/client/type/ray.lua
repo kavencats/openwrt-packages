@@ -32,10 +32,10 @@ if formvalue_proto then s.val["protocol"] = formvalue_proto end
 local arg_select_proto = luci.http.formvalue("select_proto") or ""
 
 local ss_method_list = {
-	"none", "plain", "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305", "xchacha20-poly1305", "xchacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"
+	"aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305", "xchacha20-poly1305", "xchacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"
 }
 
-local security_list = { "none", "auto", "aes-128-gcm", "chacha20-poly1305", "zero" }
+local security_list = { "auto", "aes-128-gcm", "chacha20-poly1305" }
 
 local header_type_list = {
 	"none", "srtp", "utp", "wechat-video", "dtls", "wireguard", "dns"
@@ -514,6 +514,7 @@ o:value("ios")
 o:value("android")
 o:value("random")
 o:value("randomized")
+o:value("unsafe")
 o.default = "chrome"
 o:depends({ [_n("tls")] = true, [_n("utls")] = true })
 o:depends({ [_n("tls")] = true, [_n("reality")] = true })

@@ -264,14 +264,17 @@ return view.extend({
 		so.depends({type: /^(rematch|direct|mieru)$/, '!reverse': true});
 
 		/* Rematch fields */
-		so = ss.taboption('field_general', form.ListValue, 'target_rematch_name', _('REMATCH-NAME marking'));
-		so.load = function(section_id) {
-			return hm.loadLabel.call(this, [
-				['', _('-- Please choose --')],
-				...hm.loadLabelValues(this.config, 'rematch-name')
-			], section_id);
-		}
-		so.rmempty = false;
+		// https://github.com/MetaCubeX/mihomo/pull/2862
+		so = ss.taboption('field_general', form.Value, 'target_rematch_name', _('REMATCH-NAME marking'));
+		so.value('rematch1');
+		so.validate = function(section_id, value) {
+			const target_sub_rule = this.section.getOption('target_sub_rule').formvalue(section_id);
+
+			if (!value && !target_sub_rule)
+				return _('Expecting: Least one of %s or %s.').format(_('REMATCH-NAME marking'), _('Use sub rule'));
+
+			return hm.validateAuthUsername.call(this, section_id, value);
+		};
 		so.depends('type', 'rematch');
 		so.modalonly = true;
 
@@ -282,6 +285,14 @@ return view.extend({
 				...hm.loadLabelValues(this.config, 'subrule-group')
 			], section_id);
 		}
+		so.validate = function(section_id, value) {
+			const target_rematch_name = this.section.getOption('target_rematch_name').formvalue(section_id);
+
+			if (!value && !target_rematch_name)
+				return _('Expecting: Least one of %s or %s.').format(_('REMATCH-NAME marking'), _('Use sub rule'));
+
+			return true;
+		};
 		so.depends('type', 'rematch');
 		so.modalonly = true;
 
@@ -886,14 +897,25 @@ return view.extend({
 		so.value('shadow-tls', _('shadow-tls'));
 		so.value('restls', _('restls'));
 		//so.value('kcptun', _('kcptun'));
-		so.depends('type', 'ss');
+		so.validate = function(section_id, value) {
+			const type = this.section.getOption('type').formvalue(section_id);
+
+			if (value) {
+				if (type === 'snell' && !['obfs', 'shadow-tls'].includes(value)) {
+					return _('Expecting: only support %s.').format(_('obfs-simple') +
+						' / ' + _('shadow-tls'));
+				}
+			}
+
+			return true;
+		}
+		so.depends({type: /^(ss|snell)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.ListValue, 'plugin_opts_obfsmode', _('Plugin: ') + _('Obfs Mode'));
 		so.value('http', _('HTTP'));
 		so.value('tls', _('TLS'));
 		so.depends('plugin', 'obfs');
-		so.depends('type', 'snell');
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.Value, 'plugin_opts_host', _('Plugin: ') + _('Host that supports TLS 1.3'));
@@ -901,7 +923,6 @@ return view.extend({
 		so.placeholder = 'cloud.tencent.com';
 		so.rmempty = false;
 		so.depends({plugin: /^(obfs|v2ray-plugin|shadow-tls|restls)$/});
-		so.depends('type', 'snell');
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.Value, 'plugin_opts_thetlspassword', _('Plugin: ') + _('Password'));
@@ -947,6 +968,14 @@ return view.extend({
 		})
 		so.depends({congestion_controller: 'bbr'});
 		so.depends({type: 'hysteria2'});
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'handshake_timeout', _('Handshake timeout'),
+			_('In seconds. After configuration, the handshake is not affected by the outer connection timeout.') + '</br>' +
+			_('The default value is <code>%s</code>, indicating that only the outer connection timeout is used.').format('0'));
+		so.datatype = 'uinteger';
+		so.placeholder = '30';
+		so.depends({type: /^(masque|openvpn)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.Flag, 'udp', _('UDP'));
@@ -1077,7 +1106,7 @@ return view.extend({
 			let tls = this.section.getUIElement(section_id, 'tls').node.querySelector('input');
 
 			// Force enabled
-			if (['trojan', 'anytls', 'hysteria', 'hysteria2', 'tuic', 'trusttunnel'].includes(type)) {
+			if (['trojan', 'anytls', 'hysteria', 'hysteria2', 'tuic', 'trusttunnel', 'masque'].includes(type)) {
 				tls.checked = true;
 				tls.disabled = true;
 			} else {
@@ -1086,7 +1115,7 @@ return view.extend({
 
 			return true;
 		}
-		so.depends({type: /^(http|socks5|vmess|vless|trojan|anytls|hysteria|hysteria2|tuic|trusttunnel)$/});
+		so.depends({type: /^(http|socks5|vmess|vless|trojan|anytls|hysteria|hysteria2|tuic|trusttunnel|masque)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_tls', form.Flag, 'tls_disable_sni', _('Disable SNI'),
@@ -1097,7 +1126,7 @@ return view.extend({
 
 		so = ss.taboption('field_tls', form.Value, 'tls_sni', _('TLS SNI'),
 			_('Used to verify the hostname on the returned certificates.'));
-		so.depends({tls: '1', type: /^(http|vmess|vless|trojan|anytls|hysteria|hysteria2|trusttunnel)$/});
+		so.depends({tls: '1', type: /^(http|vmess|vless|trojan|anytls|hysteria|hysteria2|trusttunnel|masque)$/});
 		so.depends({tls: '1', type: /^(tuic)$/, tls_disable_sni: '0'});
 		so.modalonly = true;
 
@@ -1114,6 +1143,7 @@ return view.extend({
 
 				switch (type) {
 					case 'ss':
+					case 'snell':
 						def_alpn = ['h2', 'http/1.1']; // when plugin === 'shadow-tls'
 						break;
 					case 'hysteria':
@@ -1142,7 +1172,7 @@ return view.extend({
 			return true;
 		}
 		so.depends({tls: '1', type: /^(vmess|vless|trojan|anytls|hysteria|hysteria2|tuic|trusttunnel)$/});
-		so.depends({type: 'ss', plugin: 'shadow-tls'});
+		so.depends({type: /^(ss|snell)$/, plugin: 'shadow-tls'});
 		so.modalonly = true;
 
 		so = ss.taboption('field_tls', form.Value, 'tls_fingerprint', _('Cert fingerprint'),
@@ -1197,7 +1227,7 @@ return view.extend({
 		so = ss.taboption('field_tls', form.Flag, 'tls_ech', _('Enable ECH'));
 		so.default = so.disabled;
 		so.depends({tls: '1', type: /^(vmess|vless|trojan|anytls|hysteria|hysteria2|tuic)$/});
-		so.depends({type: 'ss', plugin: /^(shadow-tls|restls)$/});
+		so.depends({type: 'ss', plugin: /^(v2ray-plugin|gost-plugin)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_tls', form.Value, 'tls_ech_config', _('ECH config'),
@@ -1218,7 +1248,7 @@ return view.extend({
 			so.value.apply(so, res);
 		})
 		so.depends({tls: '1', type: /^(vmess|vless|trojan|anytls|trusttunnel)$/});
-		so.depends({type: 'ss', plugin: /^(shadow-tls|restls)$/});
+		so.depends({type: /^(ss|snell)$/, plugin: /^(shadow-tls|restls)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_tls', form.Flag, 'tls_reality', _('REALITY'));
@@ -1242,6 +1272,8 @@ return view.extend({
 		so.depends('tls_reality', '1');
 		so.modalonly = true;
 
+		// @VMess-TLSmirror fields
+
 		/* Transport fields */
 		so = ss.taboption('field_general', form.Flag, 'transport_enabled', _('Transport'));
 		so.default = so.disabled;
@@ -1255,6 +1287,8 @@ return view.extend({
 		so.value('grpc', _('gRPC'));
 		so.value('ws', _('WebSocket'));
 		so.value('xhttp', _('XHTTP'));
+		//so.value('mkcp', _('mKCP')); // VMess only
+		//so.value('mekya', _('Mekya')); // VMess only
 		so.validate = function(section_id, value) {
 			const type = this.section.getOption('type').formvalue(section_id);
 

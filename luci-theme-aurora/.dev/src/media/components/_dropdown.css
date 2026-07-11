@@ -2,11 +2,11 @@
   @apply inline-flex h-fit max-w-full min-w-fit shrink-0 items-center p-0 whitespace-nowrap shadow-sm;
 
   &[disabled] {
-    @apply pointer-events-none opacity-40 dark:opacity-30;
+    @apply pointer-events-none opacity-(--app-opacity-disabled);
   }
 
   &:not(.btn):not(.cbi-button) {
-    @apply border-hairline bg-surface rounded-2xl border;
+    @apply border-hairline bg-surface min-w-52.5 max-w-full rounded-2xl border md:max-w-100;
     & > ul > li {
       &[placeholder] {
         @apply hidden;
@@ -90,7 +90,7 @@
         }
 
         &[unselectable] {
-          @apply opacity-40 dark:opacity-30;
+          @apply opacity-(--app-opacity-disabled);
         }
 
         & .hide-open {
@@ -114,6 +114,10 @@
       & > .more {
         @apply flex flex-none shrink-0 px-2.5 py-1.5;
       }
+    }
+
+    &[empty] > .more {
+      @apply flex-1;
     }
 
     &[open] {
