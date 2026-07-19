@@ -115,4 +115,19 @@ while IFS= read -r id || [ -n "$id" ]; do
 done < "$TMPDIR/ids"
 
 log "finished daed subscription update: ok=$ok fail=$fail total=$count"
-[ "$fail" -eq 0 ]
+
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+
+if [ "$count" -gt 0 ] && [ "$ok" -gt 0 ] && /bin/pidof daed >/dev/null 2>&1; then
+	run_body="$TMPDIR/run.json"
+	run_resp="$TMPDIR/run.out"
+	printf '{"query":"mutation Run($dry:Boolean!){run(dry:$dry)}","variables":{"dry":false}}' > "$run_body"
+	log "applying updated subscriptions"
+	if ! post_graphql "$run_body" "$run_resp" "$token" || grep -q '"errors"' "$run_resp"; then
+		fail 8 "failed to apply updated subscriptions: $(cat "$run_resp" 2>/dev/null)"
+	fi
+fi
+
+exit 0

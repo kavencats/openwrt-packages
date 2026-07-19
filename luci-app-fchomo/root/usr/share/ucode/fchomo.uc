@@ -211,23 +211,21 @@ export function parseVlessEncryption(payload, side) {
 		(isEmpty(content.keypairs) ? '' : '.' + join('.', map(content.keypairs, e => e[side]))); // Required
 };
 
-export function parseListener(cfg, isClient, label) {
+export function parseListener(cfg) {
 	return {
 		name: cfg['.name'],
 		type: cfg.type,
 
 		listen: cfg.listen || '::',
 		port: strToInt(cfg.port),
-		...(isClient ? {
-			"routing-mark": strToInt(cfg.routing_mark) || null,
-			rule: cfg.rule,
-			proxy: label,
-		} : {}),
+		"routing-mark": strToInt(cfg.routing_mark) || null,
+		rule: cfg.rule,
+		proxy: cfg.proxy, // raw data need post-processing
 
-		/* HTTP / SOCKS / VMess / VLESS / Trojan / AnyTLS / Tuic / Hysteria2 */
-		users: (cfg.type in ['http', 'socks', 'mixed', 'vmess', 'vless', 'trojan', 'trusttunnel']) ? [
+		/* HTTP / SOCKS / Mieru / VMess / VLESS / Trojan / AnyTLS / Tuic / Hysteria2 / ShadowQUIC / TrustTunnel */
+		users: (cfg.type in ['http', 'socks', 'mixed', 'vmess', 'vless', 'trojan', 'shadowquic', 'trusttunnel']) ? [
 			(cfg.username || cfg.vmess_uuid) ? {
-				/* HTTP / SOCKS */
+				/* HTTP / SOCKS / Trojan / ShadowQUIC / TrustTunnel */
 				username: cfg.username,
 				password: cfg.password,
 
@@ -245,37 +243,6 @@ export function parseListener(cfg, isClient, label) {
 			/* Tuic */
 			...arrToObj([[cfg.uuid, cfg.password]])
 		} : null),
-
-		/* Hysteria2 */
-		up: strToInt(cfg.hysteria_up_mbps),
-		down: strToInt(cfg.hysteria_down_mbps),
-		"ignore-client-bandwidth": strToBool(cfg.hysteria_ignore_client_bandwidth),
-		obfs: cfg.hysteria_obfs_type,
-		"obfs-password": cfg.hysteria_obfs_password,
-		"obfs-min-packet-size": strToInt(cfg.hysteria_obfs_min_packet_size),
-		"obfs-max-packet-size": strToInt(cfg.hysteria_obfs_max_packet_size),
-		masquerade: cfg.hysteria_masquerade,
-		"realm-opts": cfg.hysteria2_realm === '1' ? {
-			enable: true,
-			"server-url": cfg.hysteria2_realm_server_url,
-			token: cfg.hysteria2_realm_token,
-			"realm-id": cfg.hysteria2_realm_id,
-			"stun-servers": cfg.hysteria2_realm_stun_servers,
-			// @TLS of server-url
-			//sni,
-			//alpn,
-			//"skip-cert-verify",
-			//fingerprint,
-			//certificate,
-			//"private-key"
-		} : null,
-
-		/* Hysteria2 Realmserver */
-		token: cfg.hysteria2_realmserver_token,
-		"max-realms": strToInt(cfg.hysteria2_realmserver_max_realms),
-		"max-realms-per-ip": strToInt(cfg.hysteria2_realmserver_max_realms_per_ip),
-		"trusted-proxy-header": cfg.hysteria2_realmserver_trusted_proxy_header,
-		"realm-name-pattern": cfg.hysteria2_realmserver_realm_name_pattern,
 
 		/* Shadowsocks */
 		cipher: cfg.shadowsocks_chipher,
@@ -308,10 +275,8 @@ export function parseListener(cfg, isClient, label) {
 		psk: cfg.snell_psk,
 		version: cfg.snell_version,
 
-		/* Tuic */
-		"max-idle-time": durationToSecond(cfg.tuic_max_idle_time),
-		"authentication-timeout": durationToSecond(cfg.tuic_authentication_timeout),
-		"max-udp-relay-packet-size": strToInt(cfg.tuic_max_udp_relay_packet_size),
+		/* VMess / VLESS */
+		decryption: cfg.vless_decryption === '1' ? parseVlessEncryption(cfg.vless_encryption_hmpayload, 'server') : null,
 
 		/* Trojan */
 		"ss-option": cfg.trojan_ss_enabled === '1' ? {
@@ -323,15 +288,75 @@ export function parseListener(cfg, isClient, label) {
 		/* AnyTLS */
 		"padding-scheme": cfg.anytls_padding_scheme,
 
-		/* VMess / VLESS */
-		decryption: cfg.vless_decryption === '1' ? parseVlessEncryption(cfg.vless_encryption_hmpayload, 'server') : null,
+		/* Tuic */
+		"authentication-timeout": durationToSecond(cfg.tuic_authentication_timeout),
+		"max-udp-relay-packet-size": strToInt(cfg.tuic_max_udp_relay_packet_size),
+
+		/* Brutal */
+		up: strToInt(cfg.brutal_up_mbps),
+		down: strToInt(cfg.brutal_down_mbps),
+		"ignore-client-bandwidth": strToBool(cfg.brutal_ignore_client_bandwidth),
+
+		/* Hysteria2 */
+		obfs: cfg.hysteria_obfs_type,
+		"obfs-password": cfg.hysteria_obfs_password,
+		"obfs-min-packet-size": strToInt(cfg.hysteria_obfs_min_packet_size),
+		"obfs-max-packet-size": strToInt(cfg.hysteria_obfs_max_packet_size),
+		masquerade: cfg.hysteria_masquerade,
+		"realm-opts": cfg.hysteria2_realm === '1' ? {
+			enable: true,
+			"server-url": cfg.hysteria2_realm_server_url,
+			token: cfg.hysteria2_realm_token,
+			"realm-id": cfg.hysteria2_realm_id,
+			"stun-servers": cfg.hysteria2_realm_stun_servers,
+			// @TLS of server-url
+			//sni,
+			//alpn,
+			//"skip-cert-verify",
+			//fingerprint,
+			//certificate,
+			//"private-key"
+		} : null,
+
+		/* Hysteria2 Realmserver */
+		token: cfg.hysteria2_realmserver_token,
+		"max-realms": strToInt(cfg.hysteria2_realmserver_max_realms),
+		"max-realms-per-ip": strToInt(cfg.hysteria2_realmserver_max_realms_per_ip),
+		"trusted-proxy-header": cfg.hysteria2_realmserver_trusted_proxy_header,
+		"realm-name-pattern": cfg.hysteria2_realmserver_realm_name_pattern,
+
+		/* ShadowQUIC */
+		"quic-versions": cfg.shadowquic_quic_versions,
+		"zero-rtt": strToBool(cfg.shadowquic_zero_rtt),
+		"jls-upstream": cfg.type === 'shadowquic' ? {
+			addr: cfg.plugin_opts_handshake_dest,
+			sni: cfg.tls_sni,
+			proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
+			"rate-limit": strToInt(cfg.plugin_opts_rate_limit),
+			"quic-version-probe": strToBool(cfg.plugin_opts_quic_version_probe)
+		} : null,
+		// @# cwnd: 10 # default: 32,
+		// @# max-datagram-frame-size: 1400,
+		// @# recv-window-conn: 0,
+		// @# recv-window: 0,
+		// @# disable-mtu-discovery: false,
+
+		/* TrustTunnel */
 
 		/* Tunnel */
 		target: cfg.tunnel_target,
 
+		/* Extra fields */
+		"congestion-controller": cfg.congestion_controller,
+		"bbr-profile": cfg.bbr_profile,
+		"max-idle-time": durationToSecond(cfg.max_idle_time),
+
+		network: cfg.network,
+		udp: cfg.udp === '0' ? false : true,
+
 		/* Plugin fields */
-		...(cfg.plugin ? (
-			cfg.plugin === 'obfs' ? (
+		...(cfg.plugin === '1' ? (
+			cfg.plugin_type === 'obfs' ? (
 			// obfs-simple
 				cfg.type === 'snell' ? {
 					// snell
@@ -346,7 +371,7 @@ export function parseListener(cfg, isClient, label) {
 						mode: cfg.plugin_opts_obfsmode
 					}
 				}
-			) : cfg.plugin === 'shadow-tls' ? {
+			) : cfg.plugin_type === 'shadow-tls' ? {
 			// shadow-tls
 				"shadow-tls": {
 					enable: true,
@@ -360,10 +385,11 @@ export function parseListener(cfg, isClient, label) {
 						],
 					} : { password: cfg.plugin_opts_thetlspassword }),
 					handshake: {
-						dest: cfg.plugin_opts_handshake_dest
+						dest: cfg.plugin_opts_handshake_dest,
+						proxy: cfg.plugin_opts_dest_proxy // raw data need post-processing
 					}
 				}
-			} : cfg.plugin === 'restls' ? {
+			} : cfg.plugin_type === 'restls' ? {
 			// restls
 				"res-tls": {
 					enable: true,
@@ -371,20 +397,30 @@ export function parseListener(cfg, isClient, label) {
 					password: cfg.plugin_opts_thetlspassword,
 					"restls-script": cfg.plugin_opts_restls_script,
 					//"min-record-len": 0,
-					//proxy: ""
+					proxy: cfg.plugin_opts_dest_proxy // raw data need post-processing
+				}
+			} : cfg.plugin_type === 'jls' ? {
+			// jls
+				"jls-config": {
+					enable: true,
+					users: [
+						{
+							username: cfg.plugin_opts_thetlsusername,
+							password: cfg.plugin_opts_thetlspassword
+						}
+					],
+					dest: cfg.plugin_opts_handshake_dest,
+					sni: cfg.tls_sni,
+					alpn: cfg.tls_alpn,
+					proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
+					"rate-limit": strToInt(cfg.plugin_opts_rate_limit)
 				}
 			} : {}
 		) : {}),
 
-		/* Extra fields */
-		"congestion-controller": cfg.congestion_controller,
-		"bbr-profile": cfg.bbr_profile,
-		network: cfg.network,
-		udp: cfg.udp === '0' ? false : true,
-
 		/* TLS fields */
 		...(cfg.allow_insecure === '1' ? { "allow-insecure": true } : cfg.tls === '1' ? {
-			alpn: cfg.tls_alpn,
+			alpn: cfg.plugin_type in ['jls'] ? null : cfg.tls_alpn,
 			...(cfg.tls_reality === '1' ? {
 				"reality-config": {
 					dest: cfg.tls_reality_dest,
