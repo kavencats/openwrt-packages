@@ -23,11 +23,14 @@
 ## Features
 
 - **Modern**: Modern, content-first UI design with a clean layout and elegant animations.
+- **Fast, silky navigation**: On supported browsers, switching pages only updates the content instead of reloading the whole page, so moving between pages feels silky and seamless — and loads much faster, about 67% quicker per page switch at the median in our measurements (see the [router doc](.dev/docs/router.md#why-it-pays-measured)). This no-reload page-switching took cues from [luci-theme-footstrap](https://github.com/VizzleTF/luci-theme-footstrap).
 - **Mobile-friendly**: Optimized for mobile interactions and display, supporting both smartphones and tablets.
 - **Theme Switcher**: Built-in theme switcher with seamless switching between Auto (system), Light, and Dark modes.
+- **Command Palette (⌘K)**: Search and jump to any page from the header.
+- **Custom Background**: Set your own wallpaper for the login page and the admin interface.
 - **Floating Toolbar**: Clickable button icons for quick access to frequently used pages.
 - **Installable (PWA)**: Ships a web app manifest and app icons, so LuCI can be installed to your home screen and launched like a native app.
-- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin includes multiple built‑in theme presets you can switch between, and lets you customize Light/Dark color tokens, the navigation layout (Mega Menu, Dropdown, Sidebar), layout density, typography, branding (logo, favicons, login background), and the floating toolbar (add or edit frequently used pages).
+- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin ships five built-in theme presets and lets you customize Light/Dark color tokens, the navigation layout (Mega Menu, Dropdown, Sidebar), layout density, typography, branding, page backgrounds, and the floating toolbar — plus a theme store to browse and share complete themes.
 
 ## Preview
 
@@ -51,36 +54,66 @@
   - **Chrome/Edge 111+** _(released March 2023)_
   - **Safari 16.4+** _(released March 2023)_
   - **Firefox 128+** _(released July 2024)_
+  - _Optional enhancement, not a requirement:_ same-document navigation (no full page reload between view pages) uses the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API) where available — Chrome/Edge 105+, Safari 26.2+, Firefox 147+. Browsers without it keep classic full-page navigation automatically, with no loss of function.
 
-## Install a pre-built release
+## Installation
+
+Run these commands on the router itself (e.g. over an SSH session).
+
+### Via the eamonxg package feed
+
+```sh
+wget -qO- https://openwrt.eamonxg.fun/install.sh | sh
+```
+
+That is the whole installation — the script adds the feed and installs whatever you tick from the list it shows. Upgrade later with the usual commands: `apk update && apk upgrade luci-theme-aurora`, or `opkg update && opkg upgrade luci-theme-aurora`. Details: [openwrt.eamonxg.fun](https://openwrt.eamonxg.fun/).
+
+> **apk**: if this package was previously installed from a downloaded `.apk` file, that pinned it in `/etc/apk/world` and `apk upgrade` will silently do nothing — success reported, version unchanged. Run `apk add luci-theme-aurora` once (the name, no path) to clear the pin. The script above already does this for you.
+
+### Via a GitHub release
 
 OpenWrt 25.12+ and snapshots use `apk`; other versions use `opkg`:
 
 > **Tip**: You can confirm your package manager by running `opkg --version` or `apk --version`. If it returns output (not "not found"), that's your package manager.
 
-- **opkg** (OpenWrt < 25.12):
+```sh
+cd /tmp
 
-  ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_1.1.0-r20260711_all.ipk && opkg install luci-theme-aurora.ipk
-  ```
+# opkg
+uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_1.2.0-r20260808_all.ipk
+opkg install luci-theme-aurora.ipk
 
-- **apk** (OpenWrt 25.12+ and snapshots):
-  ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-1.1.0-r20260711.apk && apk add --allow-untrusted luci-theme-aurora.apk
-  ```
+# apk
+uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-1.2.0-r20260808.apk
+apk add --allow-untrusted luci-theme-aurora.apk
+```
 
 ## Build from source
 
 Build the package yourself with the OpenWrt build system. Host prerequisites: [Build system setup](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem). The build writes the package to `bin/packages/<arch>/base/` (e.g. `bin/packages/x86_64/base/luci-theme-aurora_*_all.ipk`); copy it to your router and install it as above.
 
-### Via the OpenWrt buildroot
+### Via the full source tree or SDK
+
+Get set up — clone the full source tree:
 
 ```sh
-# Clone OpenWrt — the openwrt-24.10 branch builds an .ipk, the main branch builds an .apk
+# Full source tree — the openwrt-24.10 branch builds an .ipk, the main branch builds an .apk
 git clone https://github.com/openwrt/openwrt.git
 cd openwrt
-git checkout openwrt-24.10       # omit to stay on main (snapshots → .apk)
+git checkout openwrt-24.10
+```
 
+Or the [prebuilt SDK](https://openwrt.org/docs/guide-developer/toolchain/using_the_sdk) (faster: skips building the toolchain). Grab the archive for your target from [downloads.openwrt.org](https://downloads.openwrt.org), which splits SDKs into Release and Snapshot builds — Release 24.10.x and earlier build `.ipk`; Release 25.12+ and Snapshot build `.apk` (filename, arch and compression vary by target):
+
+```sh
+wget <sdk-archive-url-from-downloads.openwrt.org>
+tar -xf openwrt-sdk-*.tar.*
+cd openwrt-sdk-*/
+```
+
+Then, from that directory:
+
+```sh
 # Add this package and install feeds (provides luci-base)
 git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-aurora
 ./scripts/feeds update -a
@@ -89,23 +122,10 @@ git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-au
 # Select the theme in menuconfig: LuCI → Themes → luci-theme-aurora
 make menuconfig
 
-# Build host tools + toolchain, then compile the package
+# Skip these two lines with the SDK — it already ships a built toolchain
 make tools/install -j$(nproc)
 make toolchain/install -j$(nproc)
-make package/luci-theme-aurora/compile -j$(nproc) V=s
-```
 
-### Via the prebuilt SDK (faster)
-
-The [OpenWrt SDK](https://openwrt.org/docs/guide-developer/toolchain/using_the_sdk) bundles a prebuilt toolchain, so the `tools/install` / `toolchain/install` steps are skipped. Download the SDK for your target from [downloads.openwrt.org](https://downloads.openwrt.org) (a release SDK builds `.ipk`, a snapshot SDK builds `.apk`), extract it, then from the SDK directory:
-
-```sh
-git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-aurora
-./scripts/feeds update -a
-./scripts/feeds install -a
-
-# Select the theme in menuconfig: LuCI → Themes → luci-theme-aurora
-make menuconfig
 make package/luci-theme-aurora/compile -j$(nproc) V=s
 ```
 
@@ -134,7 +154,9 @@ Thanks goes to these wonderful people:
 [Apache 2.0](LICENSE). Thanks to:
 
 - [luci-theme-bootstrap](https://github.com/openwrt/luci/tree/master/themes/luci-theme-bootstrap)
+- [luci-theme-footstrap](https://github.com/VizzleTF/luci-theme-footstrap) — a LuCI theme with its own client-side router. Aurora's same-document navigation borrows some of its ideas and implements them on the Navigation API instead — see the [router doc](.dev/docs/router.md)
 - [Vite](https://vitejs.dev/)
 - [Tailwind CSS](https://tailwindcss.com/)
+- [Tabler Icons](https://tabler.io/icons) — the interface icon set
 - [Claude Code](https://claude.ai/code)
 - [Apple](https://www.apple.com/) and [Vercel](https://vercel.com/) — design inspiration

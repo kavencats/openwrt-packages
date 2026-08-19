@@ -4,12 +4,23 @@ require "luci.sys"
 local ucursor = require "luci.model.uci".cursor()
 local json = require "luci.jsonc"
 
-local server_section = arg[1]
-local proto          = arg[2] or "tcp"
-local local_port     = arg[3] or "0"
-local socks_port     = arg[4] or "0"
+-- An omitted value reaches us either as a missing argument or as an empty
+-- string, depending on whether the caller quoted the expansion. Empty strings
+-- are truthy in Lua, so "arg[n] or default" alone does not cover both.
+local function argv(n, default)
+	local value = arg[n]
+	if value == nil or value == "" then
+		return default
+	end
+	return value
+end
 
-local chain          = arg[5] or "0"
+local server_section = arg[1]
+local proto          = argv(2, "tcp")
+local local_port     = argv(3, "0")
+local socks_port     = argv(4, "0")
+
+local chain          = argv(5, "0")
 
 -- trim
 local function trim(text)
@@ -481,7 +492,7 @@ Xray.outbounds = {
 		tag = (remarks ~= nil and remarks ~= "") and (node_id .. ":" .. remarks) or node_id,
 		-- 底层传输配置
 		streamSettings = (server.v2ray_protocol ~= "wireguard") and {
-			network = (server.v2ray_protocol == "hysteria2") and "hysteria" or (server.transport or "raw"),
+			[(xray_version_val >= 260711) and "method" or "network"] = (server.v2ray_protocol == "hysteria2") and "hysteria" or (server.transport or "raw"),
 			security = (server.xtls == '1') and "xtls" or (server.tls == '1') and "tls" or (server.reality == '1') and "reality" or nil,
 			tlsSettings = (server.tls == '1') and {
 				-- tls

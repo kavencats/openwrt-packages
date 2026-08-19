@@ -1115,6 +1115,9 @@ msgstr "重置"
 msgid "Today"
 msgstr "今天"
 
+msgid "Yesterday"
+msgstr "昨天"
+
 msgid "This Week"
 msgstr "本周"
 

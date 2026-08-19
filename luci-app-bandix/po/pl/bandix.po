@@ -1112,6 +1112,9 @@ msgstr "Resetuj"
 msgid "Today"
 msgstr "Dzisiaj"
 
+msgid "Yesterday"
+msgstr "Wczoraj"
+
 msgid "This Week"
 msgstr "Ten Tydzień"
 

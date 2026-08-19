@@ -204,8 +204,10 @@ const outbound_type = [
 	['hysteria2', _('Hysteria2') + ' - ' + _('UDP')],
 	['shadowquic', _('ShadowQUIC') + ' - ' + _('UDP')],
 	['trusttunnel', _('TrustTunnel') + ' - ' + _('TCP/UDP')],
-	['wireguard', _('WireGuard') + ' - ' + _('UDP')],
-	['masque', _('Masque') + ' - ' + _('UDP')], // https://blog.cloudflare.com/post-quantum-warp/
+	['zerotier', _('ZeroTier') + ' - ' + _('UDP') + ' - ' + _('L2')], // Endpoint
+	['wireguard', _('WireGuard') + ' - ' + _('UDP')], // Endpoint
+	['tailscale', _('Tailscale') + ' - ' + _('UDP')], // Endpoint
+	['masque', _('Masque') + ' - ' + _('UDP')], // Endpoint // https://blog.cloudflare.com/post-quantum-warp/
 	['ssh', _('SSH') + ' - ' + _('TCP')]
 ];
 
@@ -1806,7 +1808,7 @@ function validateCommonPort(section_id, value) {
 	for (let custom of arr) {
 		if (!routing_port_type.map(e => e[0]).includes(custom)) {
 			let ports = [];
-			for (let i of custom.split(',')) {
+			for (let i of custom.split(this.hm_separator ?? ',')) {
 				if (!stubValidator.apply('port', i) && !stubValidator.apply('portrange', i))
 					return _('Expecting: %s').format(_('valid port value'));
 				if (ports.includes(i))
@@ -1875,6 +1877,18 @@ function validateUrl(section_id, value) {
 	catch(e) {
 		return _('Expecting: %s').format(_('valid URL'));
 	}
+
+	return true;
+}
+
+function validateHexstr(length, section_id, value) {
+	if (!value)
+		return true;
+
+	length /= 4; // Convert bits to hex characters
+	const regexp = new RegExp(`^[0-9a-fA-F]{${length}}$`);
+	if (!value.match(regexp))
+		return _('Expecting: %s').format(_('valid hex string with %d characters').format(length));
 
 	return true;
 }
@@ -1986,15 +2000,15 @@ function lsDir(type) {
 	});
 }
 
-function readFile(type, filename) {
+function readFile(type, filename, isbinary) {
 	const callReadFile = rpc.declare({
 		object: 'luci.fchomo',
 		method: 'file_read',
-		params: ['type', 'filename'],
+		params: ['type', 'filename', 'isbinary'],
 		expect: { '': {} }
 	});
 
-	return L.resolveDefault(callReadFile(type, filename), {}).then((res) => {
+	return L.resolveDefault(callReadFile(type, filename, isbinary), {}).then((res) => {
 		if (res.content ?? true) {
 			return res.content;
 		} else
@@ -2002,15 +2016,15 @@ function readFile(type, filename) {
 	});
 }
 
-function writeFile(type, filename, content) {
+function writeFile(type, filename, content, isbinary) {
 	const callWriteFile = rpc.declare({
 		object: 'luci.fchomo',
 		method: 'file_write',
-		params: ['type', 'filename', 'content'],
+		params: ['type', 'filename', 'content', 'isbinary'],
 		expect: { '': {} }
 	});
 
-	return L.resolveDefault(callWriteFile(type, filename, content), {}).then((res) => {
+	return L.resolveDefault(callWriteFile(type, filename, content, isbinary), {}).then((res) => {
 		if (res.result) {
 			return res.result;
 		} else
@@ -2182,6 +2196,7 @@ return baseclass.extend({
 	validateUUID,
 	validateUrl,
 	// validate with bind this
+	validateHexstr,
 	validateBase64Key,
 	validateMTLSClientAuth,
 	validatePresetIDs,

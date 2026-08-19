@@ -1,17 +1,3 @@
---- a/luci-app-passwall/root/etc/uci-defaults/luci-passwall
-+++ b/luci-app-passwall/root/etc/uci-defaults/luci-passwall
-@@ -1,5 +1,10 @@
- #!/bin/sh
- 
-+[ "`which nft`" ] && uci -q set passwall.@global_forwarding[0].use_nft=1
-+
-+grep -q ip-api.com /usr/share/passwall/rules/proxy_host ||
-+	sed -i '$a ip-api.com' /usr/share/passwall/rules/proxy_host
-+
- if [ -e "/etc/config/ucitrack" ]; then
-     uci -q batch <<-EOF
-  		delete ucitrack.@passwall[-1]
-
 --- a/luci-app-passwall/Makefile
 +++ b/luci-app-passwall/Makefile
 @@ -35,7 +35,25 @@ LUCI_PKGARCH:=all
@@ -110,14 +96,14 @@
 
 --- a/luci-app-passwall/luasrc/controller/passwall.lua
 +++ b/luci-app-passwall/luasrc/controller/passwall.lua
-@@ -21,6 +21,8 @@ function index()
- 	entry({"admin", "services", appname, "reset_config"}, call("reset_config")).leaf = true
+@@ -26,6 +26,8 @@ function index()
+ 	entry({"admin", "services", appname}).dependent = true
  	entry({"admin", "services", appname, "show"}, call("show_menu")).leaf = true
  	entry({"admin", "services", appname, "hide"}, call("hide_menu")).leaf = true
 +	entry({"admin", "services", appname, "ip"}, call('check_ip')).leaf = true
 +	entry({"admin", "services", appname, "adblock_refresh"}, call('adblock_refresh')).leaf = true
  	local e
- 	if uci:get(appname, "@global[0]", "hide_from_luci") ~= "1" then
+ 	if api.uci_get_c("@global[0]", "hide_from_luci") ~= "1" then
  		e = entry({"admin", "services", appname}, alias("admin", "services", appname, "settings"), _("Pass Wall"), -1)
 @@ -211,6 +213,81 @@ function clear_log()
  	luci.sys.call("echo '' > /tmp/log/passwall.log")
@@ -204,7 +190,7 @@
 
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-@@ -547,6 +547,45 @@ function o.cfgvalue(self, section)
+@@ -547,6 +547,46 @@ function o.cfgvalue(self, section)
  		api.url("flush_set") .. "?redirect=1&reload=1", set_title)
  end
  
@@ -218,7 +204,7 @@
 +end
 +o = s:taboption("DNS", DummyValue, "refresh_data", translate("Subscribe Rules Data"))
 +o.rawhtml = true
-+o.template = appname .. "/global/adblock_refresh"
++o.template = m:template_path("/global/adblock_refresh")
 +o.value = rule_count.." "..translate("Records")
 +o.description = string.format("<strong>"..translate("Last Update Checked")..":</strong> %s<br/>",UD)
 +o:depends("adblock",1)
@@ -228,10 +214,11 @@
 +o:value("https://cdn.jsdelivr.net/gh/privacy-protection-tools/anti-AD@master/anti-ad-domains.txt", translate("anti-AD"))
 +o.default = "https://cdn.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblockdomainlite.txt"
 +o.description = translate("Support Domain / Dnsmasq / AdGuardHome / Hosts format list")
++o.rmempty = false
 +o:depends("adblock",1)
 +
 +o = s:taboption("DNS", DynamicList, "white_list", translate("Adblock white list"))
-+o.rmempty = true
++o.rmempty = false
 +o:depends("adblock",1)
 +function o.validate(self, value)
 +    local vlist = (type(value) == "table") and value or { value }
@@ -250,11 +237,13 @@
  s:tab("Proxy", translate("Mode"))
  
  o = s:taboption("Proxy", Flag, "use_direct_list", translatef("Use %s", translate("Direct List")))
-@@ -834,5 +855,6 @@ footer.api = api
- footer.global_cfgid = global_cfgid
- footer.shunt_list = api.jsonc.stringify(shunt_list)
- m:append(footer)
-+m:append(Template(appname .. "/global/status_bottom"))
+@@ -825,7 +825,7 @@ for k, v in pairs(nodes_table) do
+ end
+ 
+ m:appendTemplate("/global/footer", {shunt_list = api.jsonc.stringify(shunt_list)})
+-
++m:appendTemplate("/global/status_bottom")
+ m:appendTemplate("/cbi/sortable", {sectiontype = s2.sectiontype})
  
  return api.return_map(m)
 
@@ -291,7 +280,7 @@ index 000000000000..a00fff9c79b3
 +    height: 2.6em;
 +    display: block;
 +    float: left;
-+    margin-right: 1em;
++    margin: 0 1em;
 +}
 +
 +.status-bar .inner .status-info {

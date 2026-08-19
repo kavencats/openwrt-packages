@@ -1112,6 +1112,9 @@ msgstr "Restablecer"
 msgid "Today"
 msgstr "Hoy"
 
+msgid "Yesterday"
+msgstr "Ayer"
+
 msgid "This Week"
 msgstr "Esta Semana"
 

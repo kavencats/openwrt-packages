@@ -1112,6 +1112,9 @@ msgstr "Réinitialiser"
 msgid "Today"
 msgstr "Aujourd'hui"
 
+msgid "Yesterday"
+msgstr "Hier"
+
 msgid "This Week"
 msgstr "Cette Semaine"
 

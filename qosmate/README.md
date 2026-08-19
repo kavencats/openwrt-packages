@@ -157,9 +157,35 @@ Remember that these are starting points - optimal settings may depend on your sp
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | ------- |
 | enabled       | Enables or disables QoSmate. Set to 1 to enable, 0 to disable.                                                                                                             | boolean           | 1       |
 | WAN           | Specifies the WAN interface. This is crucial for applying QoS rules to the correct network interface. It's typically the interface connected to your ISP.                                                                      | string            | eth1    |
-| DOWNRATE      | Download rate in kbps. Set this to about 80-90% of your actual download speed to allow for overhead and prevent bufferbloat. This creates a buffer that helps maintain low latency even when the connection is fully utilized. | integer           | 90000   |
-| UPRATE        | Upload rate in kbps. Set this to about 80-90% of your actual upload speed for the same reasons as DOWNRATE.                                                                                                                    | integer           | 45000   |
+| DOWNRATE      | Download rate in kbps. Set this to about 80-90% of your actual download speed to allow for overhead and prevent bufferbloat. This creates a buffer that helps maintain low latency even when the connection is fully utilized. Set to 0 to disable ingress shaping, see [One-Directional Shaping](#one-directional-shaping). | integer           | 90000   |
+| UPRATE        | Upload rate in kbps. Set this to about 80-90% of your actual upload speed for the same reasons as DOWNRATE. Set to 0 to disable egress shaping.                                                                                | integer           | 45000   |
 | ROOT_QDISC    | Specifies the root queueing discipline. Options are 'hfsc', 'cake', 'hybrid', or 'htb' | enum (hfsc, cake, hybrid, htb) | hfsc    |
+
+### One-Directional Shaping
+
+Setting a rate to `0` disables shaping for that direction, the same convention `sqm-scripts` uses.
+
+| Configuration | Effect |
+| ------------- | ------ |
+| `DOWNRATE` and `UPRATE` greater than 0 | Both directions are shaped (default) |
+| `DOWNRATE=0` | Upload only. No IFB device, no ingress hook and no redirect are created, so the download path is left untouched |
+| `UPRATE=0` | Download only. No egress qdisc is created; classification still works because the DSCP is stored in conntrack and restored on the IFB |
+| both `0` | Nothing is shaped, only the nftables rules are applied |
+
+What `DOWNRATE=0` costs you:
+
+- **TCP bulk detection** (`TCP_DOWNPRIO_INITIAL_ENABLED`, `TCP_DOWNPRIO_SUSTAINED_ENABLED`) is
+  switched off, because its byte thresholds are derived from the download rate.
+- **`ACK_FILTER_EGRESS=auto`** cannot compute the download/upload ratio and therefore stays off. Set
+  it to `1` or `0` explicitly for a defined behaviour.
+- **Incoming packets carry no DSCP**, because the restore happens on the IFB. Devices behind the
+  router, for example an access point applying WMM, will not see any marking.
+- **CAKE ingress options** have no effect, and so does `WASHDSCPDOWN` in CAKE mode. With HFSC,
+  Hybrid and HTB, `WASHDSCPDOWN` keeps working because it is implemented in nftables.
+
+`status` and `health_check` report a disabled direction as such, so it stays distinguishable from a
+broken setup. Autorate adjusts only the direction that is actually shaped and does not start when
+both rates are 0.
 
 ### HFSC + Hybrid Specific Settings
 
@@ -377,11 +403,13 @@ logread | grep qosmate-autorate
 
 QoSmate allows you to define custom DSCP (Differentiated Services Code Point) marking rules to prioritize specific types of traffic. These rules are defined in the `/etc/config/qosmate` file under the `rule` sections and via luci-app-qosmate.
 
+> **Rules are only evaluated in the upload direction.** QoSmate stores the DSCP of a connection in conntrack on egress, and `tc-ctinfo` restores it on incoming packets before the firewall sees them. WAN → LAN traffic therefore bypasses rule evaluation completely. One rule that matches the upload direction (for example the `src_ip` of your device) automatically covers the download direction of the same connection. A mirrored "inbound" rule is not needed - it can never match, and its counter stays at 0.
+
 | Config option | Description                                                                                            | Type                                                                                                                      | Default |
 | ------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------- |
 | name          | A unique name for the rule. Used for identification and logging.                                       | string                                                                                                                    |         |
 | proto         | The protocol to match. Determines which type of traffic the rule applies to.                           | enum (tcp, udp, icmp)                                                                                                     |         |
-| src_ip        | Source IP address or range to match. Can use CIDR notation for networks.                               | string                                                                                                                    |         |
+| src_ip        | Source IP to match. Single address, CIDR notation, or a range like '192.168.1.1-192.168.1.200'.        | string                                                                                                                    |         |
 | src_port      | Source port or range to match. Can use individual ports or ranges like '1000-2000'.                    | string                                                                                                                    |         |
 | dest_ip       | Destination IP address or range to match. Similar to src_ip in format.                                 | string                                                                                                                    |         |
 | dest_port     | Destination port or range to match. Similar to src_port in format.                                     | string                                                                                                                    |         |
@@ -424,50 +452,33 @@ config rule
     option class 'cs1'
     option counter '1'
 ```
-Explanation: This rule assigns low priority to P2P traffic (like BitTorrent) by marking it as CS1. Using `list` for both `src_port` and `dest_port` covers both incoming and outgoing P2P traffic.
+Explanation: This rule assigns low priority to P2P traffic (like BitTorrent) by marking it as CS1. Both port lists are matched on outgoing packets: `src_port` catches traffic sent from your local peer's listening port, `dest_port` catches traffic sent to a remote peer's listening port.
 
 3. Call of Duty Game Traffic:
 ```
 config rule
-    option name 'cod1'
+    option name 'cod'
     option proto 'udp'
     option src_ip '192.168.1.208'
     option src_port '3074'
     option dest_port '30000-65535'
     option class 'cs5'
     option counter '1'
-
-config rule
-    option name 'cod2'
-    option proto 'udp'
-    option dest_ip '192.168.1.208'
-    option dest_port '3074'
-    option class 'cs5'
-    option counter '1'
 ```
-Explanation: These rules prioritize Call of Duty game traffic. The first rule targets outgoing traffic from the game console (IP 192.168.1.208), while the second rule handles incoming traffic. Both use CS5 class, which is typically used for gaming traffic due to its high priority. The wide range of destination ports in the first rule covers the game's server ports.
+Explanation: This rule prioritizes Call of Duty game traffic sent by the console (IP 192.168.1.208) from port 3074 to the game's server ports. It uses the CS5 class, which is typically used for gaming traffic due to its high priority. The incoming traffic of these connections is handled automatically via conntrack, so a second rule for the download direction is not required.
 
 4. Generic Game Console/Gaming PC Traffic:
 ```
 config rule
-    option name 'Game_Console_Outbound'
+    option name 'Game_Console'
     option proto 'udp'
     option src_ip '192.168.1.208'
     list dest_port '!=80'
     list dest_port '!=443'
     option class 'cs5'
     option counter '1'
-
-config rule
-    option name 'Game_Console_Inbound'
-    option proto 'udp'
-    option dest_ip '192.168.1.208'
-    list src_port '!=80'
-    list src_port '!=443'
-    option class 'cs5'
-    option counter '1'
 ```
-Explanation: These rules provide a more generic approach to prioritizing game console/gaming pc traffic. The outbound rule prioritizes all UDP traffic from the console (192.168.1.208) except for ports 80 and 443 (common web traffic). The inbound rule does the same for incoming traffic. This approach ensures that game-related traffic gets priority while allowing normal web browsing to use default priorities. The use of '!=' (not equal) in the port lists demonstrates how to exclude specific ports from the rule.
+Explanation: This rule provides a more generic approach to prioritizing game console/gaming pc traffic. It prioritizes all UDP traffic from the console (192.168.1.208) except for ports 80 and 443 (common web traffic), which ensures that game-related traffic gets priority while allowing normal web browsing to use default priorities. The use of '!=' (not equal) in the port list demonstrates how to exclude specific ports from the rule.
 This is more or less equivalent to the `realtime4` and `realtime6` variables from the SimpleHFSCgamer script. However, this rule is even better as it excludes UDP port 80 and 443, which are often used for QUIC. This is likely less of an issue on a gaming console than on a gaming PC, where a YouTube video using QUIC might be running alongside the game.
 
 This rule is also applied when the auto-setup is used via CLI or UI and a Gaming Device IP (optional) is entered.
@@ -533,8 +544,8 @@ QoSmate features an integrated IP Sets UI which allows you to manage both static
 | name          | Name of the IP set. Used to reference the set in QoS rules with the @ prefix (e.g., @gaming_devices). Must contain only letters, numbers, and underscores.  | string                   |         |
 | mode          | Defines how the set is populated. 'static' for manually specified IP lists, 'dynamic' for automatically populated sets (e.g., via DNS resolution).           | enum (static, dynamic)   | static  |
 | family        | Specifies the IP version for addresses in this set.                                                                                                         | enum (ipv4, ipv6)       | ipv4    |
-| ip4           | List of IPv4 addresses or networks to include in the set. Only applicable when mode is 'static'.                                                            | list(string)            |         |
-| ip6           | List of IPv6 addresses or networks to include in the set. Only applicable when mode is 'static'.                                                            | list(string)            |         |
+| ip4           | List of IPv4 addresses, networks or ranges (e.g. 192.168.1.1-192.168.1.200) to include in the set. Only applicable when mode is 'static'.                   | list(string)             |         |
+| ip6           | List of IPv6 addresses, networks or ranges (e.g. 2001:db8::1-2001:db8::ff) to include in the set. Only applicable when mode is 'static'.                    | list(string)             |         |
 | timeout       | Duration after which entries are removed from the set if not refreshed. Format: number + unit (s/m/h). Only applicable when mode is 'dynamic'.              | string                   | 1h      |
 | enabled       | Enables or disables the IP set.                                                                                                                             | boolean                  | 1       |
 
@@ -552,6 +563,22 @@ config ipset
     list ip4 '192.168.1.52'
     list ip4 '192.168.1.53'
 ```
+
+Instead of listing every address individually, you can use CIDR notation or an address range:
+
+```bash
+config ipset
+    option name 'guest_devices'
+    option mode 'static'
+    option family 'ipv4'
+    list ip4 '192.168.1.100-192.168.1.150'
+    list ip4 '192.168.2.0/24'
+```
+
+Overlapping entries are merged automatically. If a range covers an address that is also listed
+separately, nftables collapses both into a single interval, so `nft list set inet dscptag <name>`
+may show fewer entries than the configuration contains.
+
 This set can then be referenced in your QoS rules:
 ```bash
 config rule
@@ -617,7 +644,7 @@ Rate limits are configured via the LuCI interface under **Network → QoSmate �
 |--------|-------------|------|---------|
 | name | Descriptive name for the rate limit rule | string | |
 | enabled | Enables or disables this rate limit rule | boolean | 1 |
-| target | List of IP/IPv6 addresses or subnets to limit. Supports negation (!=) and set references (@setname) | list(string) | |
+| target | List of IP/IPv6 addresses, subnets or ranges to limit. Supports negation (!=) and set references (@setname) | list(string) | |
 | download_limit | Maximum download speed in Kbit/s (0 = unlimited) | integer | 10000 |
 | upload_limit | Maximum upload speed in Kbit/s (0 = unlimited) | integer | 10000 |
 | burst_factor | Burst allowance multiplier. 0 = strict limiting, 1.0 = rate as burst, higher = more burst | float | 1.0 |
@@ -1453,6 +1480,7 @@ QoSmate handles traffic in both directions (upload and download) using the follo
    - If the conditional bit (128) is set, the original DSCP value is restored:
      - DSCP is extracted as `mark & 63`
      - This DSCP value is applied to incoming packets
+   - Since the DSCP is already restored at this point, WAN → LAN packets skip the nftables marking chain, which is why rule counters only increase for the upload direction
 
 3. **IFB (Intermediate Functional Block):**
    - Linux can only shape outgoing traffic

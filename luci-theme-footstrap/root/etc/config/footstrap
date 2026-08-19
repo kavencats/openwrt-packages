@@ -1,0 +1,6 @@
+
+config footstrap 'settings'
+	option pattern 'a583df0ec986a6b8454f7be514e8cb32'
+	option darkmode 'dark'
+	option wallpaper 'pattern'
+	option layout 'sidebar'

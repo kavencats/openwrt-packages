@@ -1,16 +1,12 @@
 local api = require "luci.passwall.api"
-local appname = "passwall"
 local has_xray = api.finded_com("xray")
 local has_singbox = api.finded_com("sing-box")
-
 api.set_default_cbi()
 
-m = Map(appname)
-api.set_apply_on_parse(m)
+m = Map()
 
 -- [[ Rule Settings ]]--
-s = m:section(TypedSection, "global_rules", translate("Rule status"))
-s.anonymous = true
+s = m:section(NamedSection, "@global_rules[0]", "global_rules", translate("Rule status"))
 
 --[[
 o = s:option(Flag, "adblock", translate("Enable adblock"))
@@ -24,23 +20,26 @@ o:value("https://cdn.jsdelivr.net/gh/YW5vbnltb3Vz/domain-list-community@release/
 o:value("https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt", translate("Loyalsoldier/v2ray-rules-dat"))
 o:value("https://cdn.jsdelivr.net/gh/Loukky/gfwlist-by-loukky/gfwlist.txt", translate("Loukky/gfwlist-by-loukky"))
 o:value("https://cdn.jsdelivr.net/gh/gfwlist/gfwlist/gfwlist.txt", translate("gfwlist/gfwlist"))
+o:value("https://cdn.jsdelivr.net/gh/pexcn/daily@gh-pages/gfwlist/gfwlist.txt", translate("pexcn/gfwlist"))
 o.default = o.keylist[2]
 
 ----chnroute  URL
 o = s:option(DynamicList, "chnroute_url", translate("China IPs(chnroute) Update URL"))
 o:depends("geo2rule", false)
-o:value("https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt", translate("gaoyifan/china-operator-ip/china"))
 o:value("https://ispip.clang.cn/all_cn.txt", translate("Clang.CN"))
+o:value("https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt", translate("gaoyifan/china-operator-ip/china"))
 o:value("https://cdn.jsdelivr.net/gh/soffchen/GeoIP2-CN@release/CN-ip-cidr.txt", translate("soffchen/GeoIP2-CN"))
 o:value("https://cdn.jsdelivr.net/gh/Hackl0us/GeoIP2-CN@release/CN-ip-cidr.txt", translate("Hackl0us/GeoIP2-CN"))
 o:value("https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/ChinaMax/ChinaMax_IP_No_IPv6.txt", translate("ios_rule_script/ChinaMax_IP_No_IPv6"))
+o:value("https://cdn.jsdelivr.net/gh/pexcn/daily@gh-pages/chnroute/chnroute.txt", translate("pexcn/chnroute"))
 
 ----chnroute6 URL
 o = s:option(DynamicList, "chnroute6_url", translate("China IPv6s(chnroute6) Update URL"))
 o:depends("geo2rule", false)
-o:value("https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt", translate("gaoyifan/china-operator-ip/china6"))
 o:value("https://ispip.clang.cn/all_cn_ipv6.txt", translate("Clang.CN.IPv6"))
+o:value("https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt", translate("gaoyifan/china-operator-ip/china6"))
 o:value("https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/ChinaMax/ChinaMax_IP.txt", translate("ios_rule_script/ChinaMax_IP"))
+o:value("https://cdn.jsdelivr.net/gh/pexcn/daily@gh-pages/chnroute/chnroute6.txt", translate("pexcn/chnroute6"))
 
 ----chnlist URL
 o = s:option(DynamicList, "chnlist_url", translate("China List(Chnlist) Update URL"))
@@ -52,6 +51,7 @@ o:value("https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/china-
 o:value("https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/apple-cn.txt", translate("Loyalsoldier/apple-cn"))
 o:value("https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/google-cn.txt", translate("Loyalsoldier/google-cn"))
 o:value("https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/ChinaMax/ChinaMax_Domain.txt", translate("ios_rule_script/ChinaMax_Domain"))
+o:value("https://cdn.jsdelivr.net/gh/pexcn/daily@gh-pages/chinalist/chinalist.txt", translate("pexcn/chinalist"))
 
 if has_xray or has_singbox then
 	o = s:option(Value, "geoip_url", translate("GeoIP Update URL"))
@@ -85,9 +85,8 @@ if has_xray or has_singbox then
 		o.rmempty = false
 		o.description = "<ul>"
 			.. "<li>" .. translate("Experimental feature.") .. "</li>"
-			.. "<li>" .. "1." .. translate("Analyzes and preloads GeoIP/Geosite data to enhance the shunt performance of Sing-box/Xray.") .. "</li>"
+			.. "<li>" .. "1." .. translate("Parses and preloads GeoIP/Geosite data to improve Sing-box/Xray routing performance.") .. "</li>"
 			.. "<li>" .. "2." .. translate("Once enabled, the rule list can support GeoIP/Geosite rules.") .. "</li>"
-			.. "<li>" .. translate("Note: Increases resource usage; Geosite analysis is only supported in ChinaDNS-NG and SmartDNS modes.") .. "</li>"
 			.. "</ul>"
 		function o.write(self, section, value)
 			local old = m:get(section, self.option) or "0"
@@ -140,36 +139,27 @@ for _, f in ipairs(flags) do
 	o.rmempty = false
 end
 
-s:append(Template(appname .. "/rule/rule_version"))
-
-local cfgname = "shunt_rules"
+s:appendTemplate("/rule/rule_version")
 
 if has_xray or has_singbox then
-	s = m:section(TypedSection, cfgname, "Sing-Box/Xray " .. translate("Shunt Rule"), "<a style='color: red'>" .. translate("Please note attention to the priority, the higher the order, the higher the priority.") .. "</a>")
-	s.template = "cbi/tblsection"
-	s.anonymous = false
-	s.addremove = true
-	s.sortable = true
-	s.extedit = api.url("shunt_rules", "%s")
-	function s.create(e, t)
-		TypedSection.create(e, t)
-		luci.http.redirect(e.extedit:format(t))
-	end
-	function s.remove(e, t)
-		m.uci:foreach(appname, "nodes", function(s)
-			if s["protocol"] and s["protocol"] == "_shunt" then
-				m:del(s[".name"], t)
+	m:appendTemplate("/rule/shunt_rule_list")
+
+	if luci.http.formvalue("cbi.submit") == "1" then
+		local group_order = luci.http.formvaluetable("group.order")
+		if group_order then
+			for k, v in pairs(group_order) do
+				if v and v~= "" then
+					local new_order = {}
+					string.gsub(v, "[^" .. " " .. "]+", function(w)
+						new_order[#new_order + 1] = w
+					end)
+					for idx, name in ipairs(new_order) do
+						m.uci:reorder(m.config, name, idx - 1)
+					end
+				end
 			end
-		end)
-		TypedSection.remove(e, t)
+		end
 	end
-
-	o = s:option(DummyValue, "remarks", translate("Remarks"))
 end
-
-local sortable = Template(appname .. "/cbi/sortable")
-sortable.api = api
-sortable.target_cfgname = cfgname
-m:append(sortable)
 
 return api.return_map(m)

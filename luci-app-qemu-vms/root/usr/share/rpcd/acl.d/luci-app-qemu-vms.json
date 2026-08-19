@@ -19,6 +19,11 @@
 					"restart",
 					"console_open",
 					"console_close",
+					"list_machines",
+					"list_cpus",
+					"list_net_drivers",
+					"release_pci",
+					"release_usb",
 					"delete_vm"
 				]
 			},

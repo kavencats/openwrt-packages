@@ -1112,6 +1112,9 @@ msgstr "Сбросить"
 msgid "Today"
 msgstr "Сегодня"
 
+msgid "Yesterday"
+msgstr "Вчера"
+
 msgid "This Week"
 msgstr "На этой неделе"
 

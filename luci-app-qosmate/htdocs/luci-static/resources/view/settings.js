@@ -7,7 +7,6 @@
 'require fs';
 'require poll';
 'require tools.widgets as widgets';
-
 const UI_VERSION = '1.2.0';
 const UI_UPD_CHANNEL = 'release';
 
@@ -48,6 +47,31 @@ var versionInfo = {
 // Check if Software Flow Offloading is enabled  
 function isSfoEnabled() {
     return uci.get('firewall', '@defaults[0]', 'flow_offloading') === '1';
+}
+
+// The auto-setup runs detached, because a speed test regularly takes longer than uhttpd's
+// script_timeout (60s by default) and a request waiting for the whole run gets killed. Progress is
+// followed in the output file, which the backend ends with the AUTO_SETUP_DONE marker.
+function pollAutoSetupOutput(outputFile, tries, lastError) {
+    // read_direct, because ubus file.read stops at the first NUL byte and the output file can
+    // contain NUL padding while it is still being written
+    return fs.read_direct(outputFile).catch(function(err) { lastError = err; return ''; }).then(function(output) {
+        if (/^AUTO_SETUP_DONE/m.test(output))
+            return output;
+
+        if (tries <= 0)
+            return Promise.reject(new Error(lastError
+                ? _('Auto setup did not finish, last error: ') + lastError
+                : _('Auto setup did not finish within 5 minutes.')));
+
+        var status = document.getElementById('qosmate-auto-setup-status');
+        var lines = output.replace(/\r/g, '\n').trim().split('\n');
+        if (status && lines[lines.length - 1])
+            status.textContent = lines[lines.length - 1];
+
+        return new Promise(function(resolve) { window.setTimeout(resolve, 2000); })
+            .then(function() { return pollAutoSetupOutput(outputFile, tries - 1, lastError); });
+    });
 }
 
 function fetchVersionInfo() {
@@ -529,7 +553,7 @@ return view.extend({
                 }
                 
                 statusHtml.appendChild(
-                    E('div', { 'style': 'display: flex; align-items: center; gap: 4px;' }, [
+                    E('div', { 'style': 'display: flex; align-items: center; gap: 4px;', 'title': detail }, [
                         E('span', { 
                             'style': 'color: ' + color + '; font-size: 15px; font-weight: bold; min-width: 20px;'
                         }, icon),
@@ -615,35 +639,52 @@ return view.extend({
                         'click': ui.createHandlerFn(this, function() {
                             var gamingIp = document.getElementById('gaming_ip').value;
                             ui.showModal(_('Running Auto Setup'), [
-                                E('p', { 'class': 'spinning' }, _('Please wait while the auto setup is in progress...')),
+                                E('p', { 'class': 'spinning', 'id': 'qosmate-auto-setup-status' }, _('Please wait while the auto setup is in progress...')),
                                 E('div', { 'style': 'margin-top: 1em; border-top: 1px solid #ccc; padding-top: 1em;' }, [
                                     E('p', { 'style': 'font-weight: bold;' }, _('Note:')),
                                     E('p', _('Router-based speed tests may underestimate actual speeds. These results serve as a starting point and may require manual adjustment for optimal performance.'))
                                 ])
                             ]);
-                            return fs.exec_direct('/etc/init.d/qosmate', ['auto_setup_noninteractive', gamingIp])
+                            return fs.exec_direct('/etc/init.d/qosmate', ['auto_setup_detached', gamingIp])
                                 .then(function(res) {
-                                    var outputFile = res.trim();
-                                    return fs.read(outputFile).then(function(output) {
+                                    var outputFile = (res || '').trim();
+
+                                    // a backend without auto_setup_detached prints its usage instead of a path
+                                    var run = (outputFile.charAt(0) === '/')
+                                        ? pollAutoSetupOutput(outputFile, 150)
+                                        : fs.exec_direct('/etc/init.d/qosmate', ['auto_setup_noninteractive', gamingIp])
+                                            .then(function(res2) { return fs.read_direct((res2 || '').trim()); });
+
+                                    return run.then(function(output) {
                                         ui.hideModal();
                                         
                                         var wanInterface = output.match(/Detected WAN interface: (.+)/);
-                                        var downloadSpeed = output.match(/Download speed: (.+) Mbit\/s/);
-                                        var uploadSpeed = output.match(/Upload speed: (.+) Mbit\/s/);
-                                        var downrate = output.match(/DOWNRATE: (.+) kbps/);
-                                        var uprate = output.match(/UPRATE: (.+) kbps/);
+                                        var downloadSpeed = output.match(/Download speed: ([\d.]+) Mbit\/s/);
+                                        var uploadSpeed = output.match(/Upload speed: ([\d.]+) Mbit\/s/);
+                                        var downrate = output.match(/DOWNRATE: (\d+) kbps/);
+                                        var uprate = output.match(/UPRATE: (\d+) kbps/);
 
                                         if (!downloadSpeed || !uploadSpeed || parseFloat(downloadSpeed[1]) <= 0 || parseFloat(uploadSpeed[1]) <= 0 ||
                                         !downrate || !uprate || parseInt(downrate[1]) <= 0 || parseInt(uprate[1]) <= 0) {
-                                        ui.addNotification(null, E('p', _('Invalid speed test results. Please try again or set values manually.')), 'error');
+                                        ui.addNotification(null, [
+                                            E('p', _('Invalid speed test results. Please try again or set values manually.')),
+                                            E('pre', { 'style': 'white-space: pre-wrap; max-height: 12em; overflow: auto;' },
+                                                output.trim().split('\n').slice(-10).join('\n'))
+                                        ], 'error');
                                         return;
-                                        }                                        
-                                        var gamingRules = output.match(/Gaming device rules added for IP: (.+)/);
+                                        }
+
+                                        // 'rules?' keeps this working with backends that report a single rule
+                                        var gamingRules = output.match(/Gaming device rules? added for IP: (.+)/);
+                                        var existingRule = output.match(/A rule for IP (.+) already exists/);
+                                        var warnings = output.match(/^Warning: .+$/gm) || [];
         
                                         ui.showModal(_(''), [
                                             E('h2', { 'style': 'text-align:center; margin-bottom: 1em;' }, _('Auto Setup Results')),
                                             E('h3', { 'style': 'margin-bottom: 0.5em;' }, _('Speed Test Results')),
                                             E('p', { 'style': 'color: orange; margin-bottom: 1em;' }, _('Note: Router-based speed tests may underestimate actual speeds. For best results, consider running tests from a LAN device and manually entering the values. These results serve as a starting point.')),
+                                            warnings.length ? E('div', { 'class': 'alert-message warning', 'style': 'margin-bottom: 1em;' },
+                                                warnings.map(function(line) { return E('p', {}, line.replace(/^Warning: /, '')); })) : '',
                                             E('div', { 'style': 'display: table; width: 100%;' }, [
                                                 E('div', { 'style': 'display: table-row;' }, [
                                                     E('div', { 'style': 'display: table-cell; padding: 5px; font-weight: bold;' }, _('WAN Interface')),
@@ -669,9 +710,10 @@ return view.extend({
                                                     E('div', { 'style': 'display: table-cell; padding: 5px;' }, uprate ? uprate[1] + ' kbps' : _('Not set'))
                                                 ])
                                             ]),
-                                            gamingRules ? E('div', { 'style': 'margin-top: 1em;' }, [
+                                            (gamingRules || existingRule) ? E('div', { 'style': 'margin-top: 1em;' }, [
                                                 E('div', { 'style': 'font-weight: bold;' }, _('Gaming Rules')),
-                                                E('div', {}, _('Added for IP: ') + gamingRules[1])
+                                                E('div', {}, gamingRules ? _('Added for IP: ') + gamingRules[1]
+                                                                         : _('Rule already exists for IP: ') + existingRule[1])
                                             ]) : '',
                                             E('div', { 'class': 'right', 'style': 'margin-top: 1em;' }, [
                                                 E('button', {
@@ -737,11 +779,7 @@ return view.extend({
                 opt.validate = function(section_id, value) {
                     if (value === '' || value === null) return true;
                     if (!/^\d+$/.test(value)) return _('Must be a non-negative integer or empty');
-                    var intValue = parseInt(value, 10);
-                    var rootQdisc = this.section.formvalue(section_id, 'ROOT_QDISC');
-                    if (intValue === 0 && rootQdisc === 'hfsc') {
-                        return _('Value must be greater than 0 for HFSC');
-                    }
+                    // 0 is valid for every qdisc: it disables shaping for that direction
                     return true;
                 };
             }
@@ -754,8 +792,8 @@ return view.extend({
         o.editable = true;
         o.default = wanInterface;
 
-        createOption('DOWNRATE', _('Download Rate (kbps)'), _('Set the download rate in kbps'), _('Default: 90000'), 'uinteger');
-        createOption('UPRATE', _('Upload Rate (kbps)'), _('Set the upload rate in kbps'), _('Default: 45000'), 'uinteger');
+        createOption('DOWNRATE', _('Download Rate (kbps)'), _('Set the download rate in kbps. 0 disables ingress shaping (no IFB device is created).'), _('Default: 90000'), 'uinteger');
+        createOption('UPRATE', _('Upload Rate (kbps)'), _('Set the upload rate in kbps. 0 disables egress shaping.'), _('Default: 45000'), 'uinteger');
         
         // Function to get QDisc description based on value
         function getQdiscDescriptionForValue(value) {
@@ -835,6 +873,37 @@ return view.extend({
             } else {
                 return E('div');
             }
+        };
+
+        // Notice when a direction is not shaped (rate 0, same convention as sqm-scripts)
+        o = s_basic.option(form.DummyValue, '_shaping_direction', _('Shaping Direction'));
+        o.rawhtml = true;
+        o.render = function(section_id) {
+            var downrate = parseInt(uci.get('qosmate', 'settings', 'DOWNRATE') || '0');
+            var uprate = parseInt(uci.get('qosmate', 'settings', 'UPRATE') || '0');
+            if (downrate > 0 && uprate > 0) return E('div');
+
+            var lines = [];
+            if (downrate === 0 && uprate === 0) {
+                lines.push(E('strong', {}, _('No shaping active: both rates are 0')));
+                lines.push(E('br'));
+                lines.push(_('Only nftables DSCP marking is applied, no queues are created.'));
+            } else if (downrate === 0) {
+                lines.push(E('strong', {}, _('Download shaping disabled (DOWNRATE=0)')));
+                lines.push(E('br'));
+                lines.push(_('No IFB device is created. TCP bulk detection is off because its thresholds derive from the download rate, CAKE ingress options have no effect, and incoming packets carry no DSCP.'));
+                lines.push(E('br'));
+                lines.push(_('Set ACK_FILTER_EGRESS explicitly in the CAKE tab: "auto" cannot decide without a download rate.'));
+            } else {
+                lines.push(E('strong', {}, _('Upload shaping disabled (UPRATE=0)')));
+                lines.push(E('br'));
+                lines.push(_('No egress qdisc is created, so traffic classification only affects the download queue.'));
+            }
+
+            return E('div', { 'class': 'cbi-value' }, [
+                E('label', { 'class': 'cbi-value-title' }, E('span', { 'style': 'color: orange; font-weight: bold;' }, '⚠')),
+                E('div', { 'class': 'cbi-value-field', 'style': 'color: orange;' }, lines)
+            ]);
         };
 
         // Warning for bandwidth ratio

@@ -20,6 +20,7 @@ PKG_NAME:=luci-app-fchomo
 define Package/luci-app-fchomo/conffiles
 /etc/config/fchomo
 /etc/fchomo/certs/
+/etc/fchomo/node/
 /etc/fchomo/provider/
 /etc/fchomo/ruleset/
 /etc/fchomo/resources/
@@ -64,6 +65,7 @@ endef
 
 define Package/luci-app-fchomo/prerm
 #!/bin/sh
+/etc/init.d/fchomo stop 2>/dev/null
 uci delete firewall.fchomo_pre
 uci delete firewall.fchomo_post
 uci commit firewall

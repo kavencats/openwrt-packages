@@ -232,12 +232,26 @@ return view.extend({
 		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
 		ss.hm_field  = hm.glossary[ss.sectiontype].field;
 		ss.hm_lowcase_only = true;
+		/* Remove idle files start */
+		ss.renderSectionAdd = function(/* ... */) {
+			let el = hm.GridSection.prototype.renderSectionAdd.apply(this, arguments);
+
+			el.appendChild(E('button', {
+				'class': 'cbi-button cbi-button-add',
+				'title': _('Remove idles'),
+				'click': ui.createHandlerFn(this, hm.handleRemoveIdles)
+			}, [ _('Remove idles') ]));
+
+			return el;
+		}
+		/* Remove idle files end */
 
 		ss.tab('field_general', _('General fields'));
 		ss.tab('field_plugin', _('Plugin fields'));
 		ss.tab('field_vless_encryption', _('Vless Encryption fields'));
 		ss.tab('field_hysteria2_realm', _('Hysteria2 Realm fields'));
 		ss.tab('field_tls', _('TLS fields'));
+		ss.tab('field_vpn', _('VPN fields'));
 		ss.tab('field_transport', _('Transport fields'));
 		ss.tab('field_multiplex', _('Multiplex fields'));
 		ss.tab('field_dial', _('Dial fields'));
@@ -260,12 +274,12 @@ return view.extend({
 		so = ss.taboption('field_general', form.Value, 'server', _('Server address'));
 		so.datatype = 'host';
 		so.rmempty = false;
-		so.depends({type: /^(rematch|direct)$/, '!reverse': true});
+		so.depends({type: /^(rematch|direct|zerotier|tailscale)$/, '!reverse': true});
 
 		so = ss.taboption('field_general', form.Value, 'port', _('Port'));
 		so.datatype = 'port';
 		so.rmempty = false;
-		so.depends({type: /^(rematch|direct|mieru)$/, '!reverse': true});
+		so.depends({type: /^(rematch|direct|mieru|zerotier|tailscale)$/, '!reverse': true});
 
 		/* Rematch fields */
 		// https://github.com/MetaCubeX/mihomo/pull/2862
@@ -304,13 +318,13 @@ return view.extend({
 		/* hm.validateAuth */
 		so = ss.taboption('field_general', form.Value, 'username', _('Username'));
 		so.validate = hm.validateAuthUsername;
-		so.depends({type: /^(http|socks5|mieru|shadowquic|trusttunnel|ssh)$/});
+		so.depends({type: /^(http|socks5|mieru|trusttunnel|ssh)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.Value, 'password', _('Password'));
 		so.password = true;
 		so.validate = hm.validateAuthPassword;
-		so.depends({type: /^(http|socks5|mieru|trojan|anytls|tuic|hysteria2|shadowquic|trusttunnel|ssh)$/});
+		so.depends({type: /^(http|socks5|mieru|trojan|anytls|tuic|hysteria2|trusttunnel|ssh)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', hm.TextValue, 'headers', _('HTTP header'));
@@ -583,6 +597,11 @@ return view.extend({
 		so.modalonly = true;
 
 		/* AnyTLS fields */
+		so = ss.taboption('field_general', form.Value, 'anytls_client_metadata', _('Client metadata'),
+			_('The client metadata sent to the server.'));
+		so.depends('type', 'anytls');
+		so.modalonly = true;
+
 		so = ss.taboption('field_general', form.Value, 'anytls_idle_session_check_interval', _('Idle session check interval'),
 			_('In seconds.'));
 		so.placeholder = '30';
@@ -720,8 +739,7 @@ return view.extend({
 		/* ShadowQUIC fields */
 		so = ss.taboption('field_general', form.DynamicList, 'shadowquic_quic_versions', _('QUIC versions'),
 			_('Support %s, default %s.').format('v1/v2', 'v1'));
-		so.default = 'v1';
-		so.rmempty = false;
+		so.placeholder = 'v1';
 		so.depends('type', 'shadowquic');
 		so.modalonly = true;
 
@@ -742,6 +760,35 @@ return view.extend({
 		so.depends('type', 'shadowquic');
 		so.modalonly = true;
 
+		so = ss.taboption('field_general', form.Value, 'shadowquic_cwnd', _('Initial congestion window size'));
+		so.datatype = 'uinteger';
+		so.placeholder = '32';
+		so.depends('type', 'shadowquic');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'shadowquic_max_datagram_frame_size', _('Max datagram frame size'));
+		so.datatype = 'uinteger';
+		so.placeholder = '1400';
+		so.depends('type', 'shadowquic');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'shadowquic_recv_window_conn', _('Stream-level receive window size'));
+		so.datatype = 'uinteger';
+		so.placeholder = '0';
+		so.depends('type', 'shadowquic');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'shadowquic_recv_window', _('Connection-level receive window size'));
+		so.datatype = 'uinteger';
+		so.placeholder = '0';
+		so.depends('type', 'shadowquic');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Flag, 'shadowquic_mtu_discovery', _('Path MTU Discovery'));
+		so.default = so.enabled;
+		so.depends('type', 'shadowquic');
+		so.modalonly = true;
+
 		/* TrustTunnel fields */
 		so = ss.taboption('field_general', form.Flag, 'trusttunnel_health_check', _('Health check'));
 		so.default = so.enabled;
@@ -753,30 +800,124 @@ return view.extend({
 		so.depends('type', 'trusttunnel');
 		so.modalonly = true;
 
-		/* WireGuard fields */
-		so = ss.taboption('field_general', form.Value, 'wireguard_ip', _('Local address'),
-			_('The %s address used by local machine in the Wireguard network.').format('IPv4'));
-		so.datatype = 'ip4addr(1)';
-		so.placeholder = '172.16.0.2';
+		/* ZeroTier fields */
+		so = ss.taboption('field_general', form.Value, 'zerotier_network_id', 'Network ID');
+		so.placeholder = '0123456789abcdef';
+		so.validate = L.bind(hm.validateHexstr, so, 64);
 		so.rmempty = false;
-		so.depends('type', 'wireguard');
+		so.depends('type', 'zerotier');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Value, 'wireguard_ipv6', _('Local IPv6 address'),
-			_('The %s address used by local machine in the Wireguard network.').format('IPv6'));
-		so.datatype = 'ip6addr(1)';
-		so.depends('type', 'wireguard');
+		so = ss.taboption('field_general', form.Value, 'zerotier_trace_target', _('Remote trace target'),
+			_('%s of the %s used to receiving remote debugging log.').format('Node ID', 'Node'));
+		so.placeholder = '0123456789';
+		so.validate = L.bind(hm.validateHexstr, so, 40);
+		so.depends('type', 'zerotier');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Value, 'wireguard_private_key', _('Private key'),
+		so = ss.taboption('field_general', form.ListValue, 'zerotier_trace_level', _('Remote trace level'));
+		so.value('0', _('Normal'));
+		so.value('10', _('Verbose'));
+		so.value('15', _('Rules'));
+		so.value('20', _('Debug'));
+		so.value('30', _('Insane'));
+		so.depends({zerotier_trace_target: /.+/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'zerotier_physical_mtu', _('Physical MTU'),
+			_('ZeroTier UDP payload MTU.'));
+		so.datatype = 'range(510, 10324)';
+		so.placeholder = '1432';
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Flag, 'zerotier_low_bandwidth', _('Low Bandwidth Mode'),
+			_('Reduces background traffic and network configuration refresh frequency.'));
+		so.default = so.disabled;
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Flag, 'zerotier_encrypted_hello', _('Encrypted Hello'),
+			_('Use protocol-13 extended encryption for outgoing HELLO packets.'));
+		so.default = so.disabled;
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.RichListValue, 'zerotier_fallback_mode', _('Fallback mode'));
+		so.value('auto', _('Auto'), _('Uses relay after UDP direct failure.'));
+		so.value('force', _('Force'), _('Uses TCP relay only.'));
+		so.value('disable', _('Disable'), _('Turns TCP relay off.'));
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'zerotier_fallback_relay', _('Fallback relay'));
+		so.datatype = 'hostport';
+		so.placeholder = '204.80.128.1:443';
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.TextValue, 'zerotier_planet_file', 'Planet file',
+			_('Used to replace the built-in official %s.').format('<code>Earth</code> Planet file'));
+		so.placeholder = _('Add the base64 text of the planet file here.');
+		so.load = function(section_id) {
+			const vaule = form.TextValue.prototype.load.apply(this, arguments);
+
+			if (vaule)
+				return L.resolveDefault(hm.readFile(this.section.sectiontype, section_id + '/planet', '1'), '');
+			else
+				return vaule;
+		}
+		so.write = function(section_id, formvalue) {
+			form.TextValue.prototype.write.call(this, section_id, '1');
+
+			return hm.writeFile.call(this, this.section.sectiontype, section_id + '/planet', formvalue, '1');
+		}
+		so.remove = function(section_id) {
+			form.TextValue.prototype.remove.apply(this, arguments);
+
+			return hm.removeFile.call(this, this.section.sectiontype, section_id + '/planet');
+		}
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.DynamicList, 'zerotier_orbit', 'Orbit',
+			_('Join %s. Format: <code>%s</code>').format('Moons', '000000<10-digit Moon World ID>:<10-digit Node ID of one Moon Root server>...'));
+		so.placeholder = '000000deadbeef00:deadbeef00:deadbeef11';
+		so.validate = function(section_id, value) {
+			if (!value)
+				return true;
+
+			if (!/^[0-9a-fA-F]{16}(:[0-9a-fA-F]{10})+$/.test(value))
+				return _('Expecting: %s').format(_('Valid 16-digit Moon World ID and 10-digit Node ID of Moon Root server.'));
+
+			return true;
+		}
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		/* WireGuard fields */
+		so = ss.taboption('field_general', hm.GenValue, 'wireguard_private_key', _('Private key'),
 			_('WireGuard requires base64-encoded private keys.'));
+		so.hm_options = {
+			type: 'wg-keypair',
+			callback: function(result) {
+				return [
+					[this.option, result.private_key],
+					['wireguard_public_key', result.public_key]
+				]
+			}
+		}
 		so.password = true;
 		so.validate = L.bind(hm.validateBase64Key, so, 44);
 		so.rmempty = false;
 		so.depends('type', 'wireguard');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Value, 'wireguard_peer_public_key', _('Peer pubkic key'),
+		so = ss.taboption('field_general', hm.CopyValue, 'wireguard_public_key', _('Public key'));
+		so.depends('type', 'wireguard');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'wireguard_peer_public_key', _('Peer public key'),
 			_('WireGuard peer public key.'));
 		so.validate = L.bind(hm.validateBase64Key, so, 44);
 		so.rmempty = false;
@@ -808,21 +949,43 @@ return view.extend({
 		so.depends('type', 'wireguard');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Value, 'wireguard_mtu', _('MTU'));
-		so.datatype = 'range(0,9000)';
-		so.placeholder = '1408';
-		so.depends('type', 'wireguard');
+		/* Tailscale fields */
+		so = ss.taboption('field_general', form.Value, 'tailscale_hostname', _('%s Hostname').format(_('Tailscale')));
+		so.datatype = 'hostname';
+		so.depends('type', 'tailscale');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Flag, 'wireguard_remote_dns_resolve', _('Remote DNS resolve'),
-			_('Force DNS remote resolution.'));
+		so = ss.taboption('field_general', form.Value, 'tailscale_control_url', _('Control server'),
+			_('Custom %s control server.').format(_('Headscale/Tailscale')));
+		so.validate = hm.validateUrl;
+		so.depends('type', 'tailscale');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'tailscale_auth_key', _('Authentication key'));
+		so.password = true;
+		so.depends('type', 'tailscale');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Flag, 'tailscale_ephemeral', _('As ephemeral node'));
 		so.default = so.disabled;
-		so.depends('type', 'wireguard');
+		so.depends('type', 'tailscale');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.DynamicList, 'wireguard_dns', _('DNS server'));
-		so.datatype = 'or(host, hostport)';
-		so.depends('wireguard_remote_dns_resolve', '1');
+		so = ss.taboption('field_general', form.Flag, 'tailscale_accept_routes', _('Accept routes'),
+			_('Whether to accept routes advertised by other nodes.'));
+		so.default = so.disabled;
+		so.depends('type', 'tailscale');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Value, 'tailscale_exit_node', _('Exit node'));
+		so.datatype = "or(ipaddr(1), 'auto:any')";
+		so.depends('type', 'tailscale');
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.Flag, 'tailscale_exit_node_allow_lan_access', _('Allow LAN access'),
+			_('Allow access to the local LAN via the exit node.'));
+		so.default = so.disabled;
+		so.depends({tailscale_exit_node: /.+/});
 		so.modalonly = true;
 
 		/* Masque fields */
@@ -834,31 +997,11 @@ return view.extend({
 		so.depends('type', 'masque');
 		so.modalonly = true;
 
-		so = ss.taboption('field_general', form.Value, 'masque_endpoint_public_key', _('Endpoint pubkic key'),
+		so = ss.taboption('field_general', form.Value, 'masque_endpoint_public_key', _('Server public key'),
 			_('Base64 encoded ECDSA public key on the NIST P-256 curve.'));
 		so.validate = L.bind(hm.validateBase64Key, so, 124);
 		so.rmempty = false;
 		so.depends('type', 'masque');
-		so.modalonly = true;
-
-		so = ss.taboption('field_general', form.Value, 'masque_ip', _('Local address'),
-			_('The %s address used by local machine in the Cloudflare WARP network.').format('IPv4'));
-		so.datatype = 'ip4addr(1)';
-		so.placeholder = '172.16.0.2';
-		so.rmempty = false;
-		so.depends({type: 'masque', masque_network: /^(|h2)$/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_general', form.Value, 'masque_ipv6', _('Local IPv6 address'),
-			_('The %s address used by local machine in the Cloudflare WARP network.').format('IPv6'));
-		so.datatype = 'ip6addr(1)';
-		so.depends({type: 'masque', masque_network: /^(|h2)$/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_general', form.Value, 'masque_mtu', _('MTU'));
-		so.datatype = 'range(0,9000)';
-		so.placeholder = '1280';
-		so.depends({type: 'masque', masque_network: /^(|h2)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.ListValue, 'masque_network', _('Network'));
@@ -879,17 +1022,6 @@ return view.extend({
 			return true;
 		}
 		so.depends('type', 'masque');
-		so.modalonly = true;
-
-		so = ss.taboption('field_general', form.Flag, 'masque_remote_dns_resolve', _('Remote DNS resolve'),
-			_('Force DNS remote resolution.'));
-		so.default = so.disabled;
-		so.depends('type', 'masque');
-		so.modalonly = true;
-
-		so = ss.taboption('field_general', form.DynamicList, 'masque_dns', _('DNS server'));
-		so.datatype = 'or(host, hostport)';
-		so.depends('masque_remote_dns_resolve', '1');
 		so.modalonly = true;
 
 		/* SSH fields */
@@ -913,6 +1045,23 @@ return view.extend({
 		so.modalonly = true;
 
 		/* Extra fields */
+		so = ss.taboption('field_general', form.ListValue, 'ipstack', _('IP stack'));
+		so.value('', _('Keep default'));
+		so.value('auto', _('Auto'));
+		so.value('gvisor', _('gVisor'));
+		so.value('mips', _('mihomo IP stack (MIPS)'));
+		so.depends({type: /^(zerotier|wireguard|masque|openvpn)$/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_general', form.ListValue, 'ipstack_congestion_controller', _('IP stack') + ': ' + _('Congestion controller'));
+		so.value('', _('Keep default'));
+		so.value('cubic', _('cubic'));
+		so.value('reno', _('reno'));
+		so.value('bbr', _('bbr'));
+		so.value('bbr3', _('bbr3'));
+		so.depends({ipstack: /^(auto|mips)$/}); // not empty not gvisor
+		so.modalonly = true;
+
 		so = ss.taboption('field_general', form.ListValue, 'congestion_controller', _('Congestion controller'));
 		so.default = hm.congestion_controller[0][0];
 		hm.congestion_controller.forEach((res) => {
@@ -942,12 +1091,12 @@ return view.extend({
 			_('The default value is <code>%s</code>, indicating that only the outer connection timeout is used.').format('0'));
 		so.datatype = 'uinteger';
 		so.placeholder = '30';
-		so.depends({type: /^(openvpn|masque)$/});
+		so.depends({type: /^(hysteria2|openvpn|masque)$/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_general', form.Flag, 'udp', _('UDP'));
 		so.default = so.disabled;
-		so.depends({type: /^(rematch|direct|socks5|ss|mieru|vmess|vless|trojan|anytls|trusttunnel|wireguard|masque)$/});
+		so.depends({type: /^(rematch|direct|socks5|ss|mieru|vmess|vless|trojan|anytls|trusttunnel|zerotier|wireguard|tailscale|masque)$/});
 		so.depends({type: 'snell', snell_version: /^(3|4|5)$/});
 		so.modalonly = true;
 
@@ -990,7 +1139,7 @@ return view.extend({
 						' / ' + _('JLS'));
 				}
 				if (['vmess', 'vless', 'trojan', 'anytls'].includes(type) && !['shadow-tls', 'restls', 'jls'].includes(value)) {
-					return _('Expecting: only support %s.').format(_('ShadowTLS') +
+					return _('Expecting: Only support %s.').format(_('ShadowTLS') +
 						' / ' + _('Restls') +
 						' / ' + _('JLS'));
 				}
@@ -1012,18 +1161,21 @@ return view.extend({
 		so.placeholder = 'cloud.tencent.com';
 		so.rmempty = false;
 		so.depends({plugin_type: /^(obfs|v2ray-plugin|shadow-tls|restls|jls)$/});
+		so.depends('type', 'shadowquic');
 		so.modalonly = true;
 
 		so = ss.taboption('field_plugin', form.Value, 'plugin_opts_thetlsusername', _('Username'));
 		so.validate = hm.validateAuthUsername;
 		so.rmempty = false;
 		so.depends({plugin_type: 'jls'});
+		so.depends('type', 'shadowquic');
 		so.modalonly = true;
 
 		so = ss.taboption('field_plugin', form.Value, 'plugin_opts_thetlspassword', _('Password'));
 		so.password = true;
 		so.rmempty = false;
 		so.depends({plugin_type: /^(shadow-tls|restls|jls)$/});
+		so.depends('type', 'shadowquic');
 		so.modalonly = true;
 
 		so = ss.taboption('field_plugin', form.ListValue, 'plugin_opts_shadowtls_version', _('Version'));
@@ -1154,7 +1306,7 @@ return view.extend({
 		so.default = so.disabled;
 		so.validate = function(section_id, value) {
 			const type = this.section.getOption('type').formvalue(section_id);
-			let tls = this.section.getUIElement(section_id, 'tls').node.querySelector('input');
+			const tls = this.getUIElement(section_id).node.querySelector('input');
 
 			// Force enabled
 			if (['trojan', 'anytls', 'tuic', 'hysteria', 'hysteria2', 'shadowquic', 'trusttunnel', 'masque'].includes(type)) {
@@ -1177,7 +1329,7 @@ return view.extend({
 
 		so = ss.taboption('field_tls', form.Value, 'tls_sni', _('TLS SNI'),
 			_('Hostname that the client attempts to connect to at the start of the TLS handshake process.'));
-		so.depends({tls: '1', type: /^(http|vmess|vless|trojan|anytls|hysteria|hysteria2|shadowquic|trusttunnel|masque)$/});
+		so.depends({tls: '1', type: /^(http|vmess|vless|trojan|anytls|hysteria|hysteria2|trusttunnel|masque)$/});
 		so.depends({tls: '1', type: /^(tuic)$/, tls_disable_sni: '0'});
 		so.modalonly = true;
 
@@ -1317,7 +1469,7 @@ return view.extend({
 			value = this.formvalue(section_id);
 
 			if (value == 1 && ['shadow-tls', 'restls', 'jls'].includes(plugin_type))
-				return _('Expecting: cannot be enabled when %s is enabled.').format(_('ShadowTLS') +
+				return _('Expecting: Cannot be enabled when %s is enabled.').format(_('ShadowTLS') +
 					' / ' + _('Restls') +
 					' / ' + _('JLS'));
 
@@ -1343,6 +1495,176 @@ return view.extend({
 		so.modalonly = true;
 
 		// @VMess-TLSmirror fields
+
+		/* VPN fields */
+		so = ss.taboption('field_vpn', form.Flag, 'auto_firewall', _('Firewall'),
+			_('Auto configure firewall'));
+		so.default = so.enabled;
+		so.validate = function(section_id, value) {
+			const primary_port = this.section.getOption('zerotier_primary_port').formvalue(section_id);
+			const secondary_port = this.section.getOption('zerotier_secondary_port').formvalue(section_id);
+			const auto_firewall = this.getUIElement(section_id).node.querySelector('input');
+
+			// Force disabled
+			if ((!primary_port || primary_port <= 0) && (!secondary_port || secondary_port <= 0)) {
+				auto_firewall.checked = false;
+				auto_firewall.disabled = true;
+			} else
+				auto_firewall.removeAttribute('disabled');
+
+			return true;
+		}
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Value, 'zerotier_primary_port', _('Listen port') + ' (%s)'.format(_('Primary')),
+			_('%s UDP port. <code>0</code> selects an available port.').format(_('Primary')));
+		so.datatype = 'port';
+		so.placeholder = '9993';
+		so.load = function(section_id) {
+			const listen_port = this.map.data.get(this.section.config, section_id, 'zerotier_listen_port');
+			const value = [
+				this.map.data.get(this.section.config, section_id, 'zerotier_primary_port'),
+				this.map.data.get(this.section.config, section_id, 'zerotier_secondary_port')
+			].filter(Boolean).join(',');
+
+			if (listen_port !== value) {
+				uci.set(this.section.config, section_id, 'zerotier_listen_port', value);
+				uci.save();
+			}
+
+			return form.Value.prototype.load.apply(this, arguments);
+		}
+		so.write = function(section_id, formvalue) {
+			uci.set(this.section.config, section_id, 'zerotier_listen_port', [
+				this.section.getOption('zerotier_primary_port').formvalue(section_id),
+				this.section.getOption('zerotier_secondary_port').formvalue(section_id)
+			].filter(Boolean).join(','));
+
+			return form.Value.prototype[formvalue ? 'write' : 'remove'].apply(this, arguments);
+		}
+		so.remove = so.write;
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Value, 'zerotier_secondary_port', _('Listen port') + ' (%s)'.format(_('Secondary')),
+			_('%s UDP port. <code>0</code> selects an available port.').format(_('Secondary')) + '</br>' +
+			_('<code>-1</code> disables it.'));
+		so.datatype = 'or(port, -1)';
+		so.placeholder = '0';
+		so.load = function(section_id) {
+			const listen_port = this.map.data.get(this.section.config, section_id, 'zerotier_listen_port');
+			const value = [
+				this.map.data.get(this.section.config, section_id, 'zerotier_primary_port'),
+				this.map.data.get(this.section.config, section_id, 'zerotier_secondary_port')
+			].filter(Boolean).join(',');
+
+			if (listen_port !== value) {
+				uci.set(this.section.config, section_id, 'zerotier_listen_port', value);
+				uci.save();
+			}
+
+			return form.Value.prototype.load.apply(this, arguments);
+		}
+		so.write = function(section_id, formvalue) {
+			uci.set(this.section.config, section_id, 'zerotier_listen_port', [
+				this.section.getOption('zerotier_primary_port').formvalue(section_id),
+				this.section.getOption('zerotier_secondary_port').formvalue(section_id)
+			].filter(Boolean).join(','));
+
+			return form.Value.prototype[formvalue ? 'write' : 'remove'].apply(this, arguments);
+		}
+		so.remove = so.write;
+		so.depends('type', 'zerotier');
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Value, 'endpoint_ip', _('Virtual address'),
+			_('The %s address used by local machine in the %s network.').format(_('IPv4'), _('VPN')));
+		so.datatype = 'or(ip4addr(1), cidr4)';
+		so.placeholder = '172.16.0.2';
+		so.validate = function(section_id, value) {
+			const type = this.section.getOption('type').formvalue(section_id);
+			const desc = this.getUIElement(section_id).node.nextSibling;
+
+			switch (type) {
+				case 'wireguard':
+					desc.innerHTML = _('The %s address used by local machine in the %s network.')
+						.format(_('IPv4'), _('Wireguard'));
+					break;
+				case 'masque':
+					desc.innerHTML = _('The %s address used by local machine in the %s network.')
+						.format(_('IPv4'), _('Cloudflare WARP'));
+					break;
+			}
+
+			return true;
+		}
+		so.rmempty = false;
+		so.depends('type', 'wireguard');
+		so.depends({type: 'masque', masque_network: /^(|h2)$/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Value, 'endpoint_ipv6', _('Virtual IPv6 address'),
+			_('The %s address used by local machine in the %s network.').format(_('IPv6'), _('VPN')));
+		so.datatype = 'or(ip6addr(1), cidr6)';
+		so.validate = function(section_id, value) {
+			const type = this.section.getOption('type').formvalue(section_id);
+			const desc = this.getUIElement(section_id).node.nextSibling;
+
+			switch (type) {
+				case 'wireguard':
+					desc.innerHTML = _('The %s address used by local machine in the %s network.')
+						.format(_('IPv6'), _('Wireguard'));
+					break;
+				case 'masque':
+					desc.innerHTML = _('The %s address used by local machine in the %s network.')
+						.format(_('IPv6'), _('Cloudflare WARP'));
+					break;
+			}
+
+			return true;
+		}
+		so.depends('type', 'wireguard');
+		so.depends({type: 'masque', masque_network: /^(|h2)$/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Value, 'endpoint_mtu', _('MTU'));
+		so.datatype = 'range(0,9000)';
+		so.placeholder = '1400';
+		so.validate = function(section_id, value) {
+			const type = this.section.getOption('type').formvalue(section_id);
+			const UIEl = this.getUIElement(section_id);
+
+			let def_mtu;
+			switch (type) {
+				case 'zerotier':
+					def_mtu = '1400';
+					break;
+				case 'wireguard':
+					def_mtu = '1408';
+					break;
+				case 'masque':
+					def_mtu = '1280';
+					break;
+			}
+			UIEl.node.querySelector('input').placeholder = def_mtu;
+
+			return true;
+		}
+		so.depends({type: /^(zerotier|wireguard)$/});
+		so.depends({type: 'masque', masque_network: /^(|h2)$/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.Flag, 'endpoint_remote_dns_resolve', _('Remote DNS resolve'),
+			_('Force DNS remote resolution.'));
+		so.default = so.disabled;
+		so.depends({type: /^(zerotier|wireguard|masque)$/});
+		so.modalonly = true;
+
+		so = ss.taboption('field_vpn', form.DynamicList, 'endpoint_dns', _('DNS server'));
+		so.datatype = 'or(host, hostport)';
+		so.depends('endpoint_remote_dns_resolve', '1');
+		so.modalonly = true;
 
 		/* Transport fields */
 		so = ss.taboption('field_general', form.Flag, 'transport_enabled', _('Transport'));

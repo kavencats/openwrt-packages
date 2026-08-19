@@ -11,8 +11,13 @@ address, so they stay local).
 
 | Metric | Budget | Track | Source |
 |---|---|---|---|
-| main.css (gzip-transferred) | ≤ 30 KB | size | measured 2026-07 (28 KB) |
-| Per-page cold transfer (all theme assets, gzip) | ≤ 60 KB | size | sum of current gzip sizes + headroom |
+| main.css (identity/raw) | ≤ 193 KB | size | production build, 2026-08 (191,899 B; +~2 KB custom-background mode, +~0.5 KB router progress bar / live region; the bar is now Turbo-shaped — width/opacity only, inserted per navigation) |
+| login.css (identity/raw) | ≤ 12 KB | size | production build, 2026-07 (10,935 B, token-pruned) |
+| menu-aurora.js (identity/raw) | ≤ 21.5 KB | size | production build, 2026-08 (20,851 B; +1.3 KB for the router's `syncRoute`/`closeSurfaces` hooks) |
+| router-aurora.js (identity/raw, Navigation-API browsers only) | ≤ 15 KB | size | production build, 2026-08 (14,844 B: template shells fetched, per-render listener teardown, timeout-as-failure, expiry gate, readonly folding, node css, wildcard actions, trickling progress bar, same-URL reload rule, visibility gate, contract check) |
+| Default logo (identity/raw) | ≤ 16 KB | size | production build, 2026-07 (15,057 B) |
+| Core admin cold theme assets (identity/raw) | ≤ 267 KB | size | main CSS + menu JS + router JS + default font + logo, 2026-08 (≈266.3 KB; the router is a one-time cost that removes per-click dispatcher work) |
+| Login cold theme assets, excluding configured background (identity/raw) | ≤ 55 KB | size | login CSS + default font + logo, 2026-07 (49,572 B) |
 | Blocking requests before first paint | ≤ 4 | count | current waterfall |
 | Repeat-visit asset requests | ≈ 0 | count | target state; package-built CSS/JS URLs are versioned, but long-lived cache headers still need live verification |
 | TTFB, login page (device) | proposed: ≤ 130 ms | latency | local device baseline, 2026-07 |
@@ -25,16 +30,35 @@ Budget revisions require a new baseline entry under `../baselines/`.
 ## Optimization ledger
 
 ### Landed
-(compositor animation rework; mega-menu idle pre-measurement; on-demand
-patches; `font-display: swap`)
+
+- Compositor animation rework; mega-menu idle pre-measurement; on-demand
+  patches; `font-display: swap` and inline `@font-face` CSS.
+- Tailwind `source(none)`, login-only Preflight removal, native scrollbar
+  styling, and local fade animation; unused CSS plugins removed.
+- Shared SVG custom properties prevent repeated mask payloads.
+- Terser compression/mangling with LuCI loader directives preserved.
+- Default logo raster resized inside its compatibility SVG wrapper.
+- Login template reuses its board/UCI reads when including `header.ut`.
+- Package-root `.DS_Store` metadata removed and covered by a regression test.
+- login.css pruned to its reachable custom properties at build time (the
+  shared token sheet is admin-sized; the login page consumes a fraction).
+
+- Client-side router (`router-aurora.js`, `.dev/docs/router.md`,
+  2026-08-16): view/alias/firstchild/overview navigations become
+  same-document swaps on Navigation-API browsers, MPA elsewhere.
+  Measured on RE-SS-01 over plain HTTP (`bench-router.mjs`, RUNS=10): click →
+  view painted **241–544 ms → 49–251 ms warm, median −67 %**; walk of
+  51/62 linked pages (mega-menu/sidebar), 42–43 served, **0 divergences** vs
+  full loads incl. DOM shape; 65-navigation soak flat after the first lap
+  once departed regions are cleared through `dom.content()` (the data-idref
+  registry otherwise pins every departed subtree: 26k → 72k nodes before)
+  and per-render window/document listeners are torn down; back traversal
+  through alias/firstchild entries same-document; poison gate → full load →
+  router again. Report in `../baselines/router-re-ss-01.md`.
 
 ### Pending
 | Item | Principle | Estimated gain |
 |---|---|---|
-| Precompressed `.gz` assets | S1+L3 | ~260 KB → ~35 KB cold |
-| Terser `compress`+`mangle` in `vite.config.ts` | L3 | ~20 KB → ~10 KB |
-| Inline `@font-face` + preload woff2 | L1 | −1 blocking RTT |
-| SVGO `logo.svg` | L3 | 45 KB → est. < 20 KB |
 | Long-lived cache headers for versioned CSS/JS | L2 | after LuCI build-time `?v=$(PKG_VERSION)`, kills per-click 304s if headers permit disk/memory cache reuse |
 | `defer` head scripts | L1 | needs on-device timing verification |
 
@@ -50,6 +74,9 @@ patches; `font-display: swap`)
   `/luci-static/aurora/login.css?v=1.0.7`. Do not re-propose manual
   cache-versioning for these links unless inspecting the installed package
   or live HTML proves the rewrite did not happen.
+- **No gzip on the target uhttpd** — budgets and the bench harness use raw
+  identity bytes. Do not add precompressed sidecars unless the deployed HTTP
+  server is changed and live response headers prove negotiation works.
 
 ### Accepted exceptions
 

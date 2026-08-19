@@ -114,6 +114,14 @@ return L.view.extend({
 		return m.checkDepends();
 	};
 
+	o = s.option(form.Flag, "mptcp_dscp_weight_vps_sync", _("Mirror DSCP/weight pins to gateway"),
+		_("When using a DSCP or weight BPF scheduler, also sync each WAN’s pin to the gateway (VPS) so it also holds for traffic the gateway sends (downloads), not just traffic the router sends (uploads). Disabling this only stops future syncs -- it does not remove pins already pushed to the gateway."));
+	o.default = "1";
+	o.depends("mptcp_scheduler", "bpf_dscp");
+	o.depends("mptcp_scheduler", "bpf_weight");
+	o.depends("mptcp_scheduler", "bpf_weight_rr");
+	o.depends("mptcp_scheduler", "bpf_burstweight");
+
 	if (parseFloat(boardinfo.kernel.substring(0,4)) < 6) {
 		o = s.option(form.Value, "mptcp_syn_retries", _("Multipath TCP SYN retries"));
 		o.datatype = "uinteger";
@@ -143,6 +151,16 @@ return L.view.extend({
 		o.value(0, _("In-kernel path manager"));
 		o.value(1, _("Userspace path manager"));
 		o.default = 0;
+		// LuCI's CBI removes an option instead of writing it whenever the
+		// submitted value equals .default and rmempty is left at its class
+		// default of true (see issue #4348 for the same pattern). That would
+		// silently delete network.globals.mptcp_pm_type on every Save & Apply
+		// of this page (not just when this field itself is touched), and the
+		// init script's own fallback for an absent value is "1" (userspace
+		// path manager) -- the opposite of this field's default -- which
+		// disables in-kernel fullmesh subflow creation entirely and breaks
+		// multi-WAN bonding down to the master WAN only (issue #4349).
+		o.rmempty = false;
 
 		o = s.option(form.ListValue, "mptcp_disable_initial_config", _("Initial MPTCP configuration"));
 		o.depends("mptcp_pm_type","1");
@@ -275,6 +293,13 @@ return L.view.extend({
 	o.value("backup", _("backup"));
 	//o.value("handover", _("handover"));
 	o.default = "off";
+	// Same rmempty/default collision as mptcp_pm_type above: without this,
+	// every interface currently set to "off" has network.<iface>.multipath
+	// silently deleted on each Save & Apply of this page. Currently harmless
+	// (the init script's own fallback for an absent value is also "off"),
+	// but keep the persisted value explicit so a future fallback change
+	// can't quietly flip behavior for these interfaces too.
+	o.rmempty = false;
 
 	o = s.option(form.Value, "multipath_weight", _("Weight"), _("Only used by *weight schedulers/path managers. Ignored if no weight scheduler is selected.") + '<br />' + _("A weight >100 make it more attractive, a weight <100 make it less attractive. Max 256"));
 	o.datatype = "uinteger";

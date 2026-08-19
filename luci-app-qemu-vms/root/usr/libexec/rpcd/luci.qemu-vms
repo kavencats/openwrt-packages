@@ -4,6 +4,7 @@
 . /lib/functions.sh
 
 STATUS_DIR="/var/run/qemu-vms"
+LOG_DIR="/var/log/qemu-vms"
 
 is_anonymous_section() {
 	# UCI auto-generated names look like: cfgXXXXXX (cfg + hex)
@@ -85,7 +86,7 @@ find_free_port() {
 
 console_open() {
 	local vm="$1"
-	local sock="/var/run/qemu-$vm.sock"
+	local sock="$STATUS_DIR/qemu-$vm.sock"
 	local pidfile="$STATUS_DIR/$vm.ttyd.pid"
 	local portfile="$STATUS_DIR/$vm.ttyd.port"
 
@@ -145,7 +146,7 @@ console_close() {
 readlog() {
 	local vm="$1"
 	local lines="${2:-200}"
-	local log="/var/log/qemu-$vm-console.log"
+	local log="$LOG_DIR/$vm.log"
 
 	json_init
 	if [ -f "$log" ]; then
@@ -293,9 +294,9 @@ vm_status_one() {
 	[ -n "$pid" ] && json_add_int "pid" "$pid"
 	[ -n "$ram_kb" ] && json_add_int "ram_kb" "$ram_kb"
 	[ -n "$image_bytes" ] && json_add_int "disk_bytes" "$image_bytes"
-	json_add_string "console_sock" "/var/run/qemu-$vm.sock"
-	json_add_string "console_log" "/var/log/qemu-$vm-console.log"
-	json_add_string "qmp_sock" "/var/run/qemu-$vm.qmp"
+	json_add_string "console_sock" "$STATUS_DIR/qemu-$vm.sock"
+	json_add_string "file_log" "$LOG_DIR/$vm.log"
+	json_add_string "qmp_sock" "$STATUS_DIR/qemu-$vm.qmp"
 	json_close_object
 }
 
@@ -309,7 +310,12 @@ case "$1" in
 			"readlog": { "vm_name": "", "lines": 0 },
 			"console_open": { "vm_name": "" },
 			"console_close": { "vm_name": "" },
+			"list_cpus": { },
 			"list_hardware": { },
+			"list_machines": { },
+			"list_net_drivers": { },
+			"release_pci": { "section_name": "" },
+			"release_usb": { "section_name": "" },
 			"delete_vm": { "vm_name": "" }
 		}'
 		;;
@@ -320,6 +326,7 @@ case "$1" in
 		json_get_var lines lines
 		json_get_var offset offset
 		json_get_var data data
+		json_get_var section_name section_name
 
 		case "$2" in
 			status)
@@ -365,6 +372,51 @@ case "$1" in
 				;;
 			list_hardware)
 				list_hardware
+				;;
+			list_machines)
+				machines=$(/usr/bin/qemu-system-x86_64 -M help 2>/dev/null | grep -E '^[a-zA-Z0-9_-]+' | grep -v Supported | awk '{print $1}')
+				json_init
+				json_add_array "machines"
+				for m in $machines; do
+					json_add_string "" "$m"
+				done
+				json_close_array
+				json_dump
+				;;
+			list_cpus)
+				cpus=$(/usr/bin/qemu-system-x86_64 -cpu help 2>/dev/null | \
+					awk '/^[[:space:]]*$/ || /Recognized/ {exit} {print $1}')
+				json_init
+				json_add_array "cpus"
+				for c in $cpus; do
+					json_add_string "" "$c"
+				done
+				json_close_array
+				json_dump
+				;;
+			list_net_drivers)
+				drivers=$(/usr/bin/qemu-system-x86_64 -device help 2>/dev/null | \
+					awk '/^Network devices:/{flag=1; next} /^[[:space:]]*$/{if(flag) exit} flag && /^name "[^"]+"/{print $2}' | \
+					sed -e 's/"//g' -e 's/,//g' )
+				json_init
+				json_add_array "drivers"
+				for d in $drivers; do
+					json_add_string "" "$d"
+				done
+				json_close_array
+				json_dump
+				;;
+			release_pci)
+				/etc/init.d/qemu-vms release_pci_passthrough "$section_name" >/dev/null 2>&1
+				json_init
+				json_add_boolean "success" 1
+				json_dump
+				;;
+			release_usb)
+				/etc/init.d/qemu-vms release_usb_passthrough "$section_name" >/dev/null 2>&1
+				json_init
+				json_add_boolean "success" 1
+				json_dump
 				;;
 			delete_vm)
 				stop_vm_instance "$vm_name"

@@ -1112,6 +1112,9 @@ msgstr "リセット"
 msgid "Today"
 msgstr "今日"
 
+msgid "Yesterday"
+msgstr "昨日"
+
 msgid "This Week"
 msgstr "今週"
 

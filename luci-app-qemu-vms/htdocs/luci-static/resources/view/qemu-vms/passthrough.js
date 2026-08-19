@@ -11,6 +11,18 @@ var callListHardware = rpc.declare({
 	params: []
 });
 
+var callReleasePci = rpc.declare({
+	object: 'luci.qemu-vms',
+	method: 'release_pci',
+	params: ['section_name']
+});
+
+var callReleaseUsb = rpc.declare({
+	object: 'luci.qemu-vms',
+	method: 'release_usb',
+	params: ['section_name']
+});
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -33,7 +45,7 @@ return view.extend({
 		});
 		return found;
 	},
-
+	/*
 	pciOwner: function(addr) {
 		var section = this.findPciSection(addr);
 		if (!section)
@@ -44,6 +56,19 @@ return view.extend({
 				owner = vm['.name'];
 		});
 		return owner;
+	},
+	*/
+	pciOwners: function(addr) {
+		var section = this.findPciSection(addr);
+		if (!section)
+			return [];
+		var owners = [];
+		uci.sections('qemu-vms', 'vm').forEach(function(vm) {
+		var list = [].concat(vm.pci_passthrough || []);
+		if (list.indexOf(section) !== -1)
+			owners.push(vm['.name']);
+		});
+		return owners;
 	},
 
 	// --- USB helpers ---
@@ -70,7 +95,21 @@ return view.extend({
 		return owners;
 	},
 
-	// --- Действия для PCI ---
+	cleanupVmReferences: function(sectionType, sectionName) {
+	// sectionType: 'pci_passthrough' or 'usb_passthrough'
+		uci.sections('qemu-vms', 'vm').forEach(function(vm) {
+			var list = [].concat(vm[sectionType] || []);
+			var index = list.indexOf(sectionName);
+			if (index !== -1) {
+				list.splice(index, 1);
+				if (list.length)
+					uci.set('qemu-vms', vm['.name'], sectionType, list);
+				 else
+					uci.unset('qemu-vms', vm['.name'], sectionType);
+				}
+			}
+		);
+	},
 
 	createPciPassthrough: function(dev, ev) {
 		var self = this;
@@ -132,7 +171,6 @@ return view.extend({
 			ui.hideModal();
 			ui.addNotification(null, E('p',
 				_('PCI passthrough section "%s" created for %s. Device is now detached from the host driver.').format(sectionName, dev.addr)), 'info');
-			// Обновляем представление без перезагрузки
 			self.updateView();
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', _('Error saving: ') + err.message), 'error');
@@ -147,9 +185,9 @@ return view.extend({
 			return;
 		}
 
-		var owner = this.pciOwner(addr);
-		if (owner) {
-			ui.addNotification(null, E('p', _('This device is currently attached to VM "%s". Please detach it from the VM first.').format(owner)), 'error');
+		var owners = this.pciOwners(addr);
+		if (owners.length) {
+			ui.addNotification(null, E('p', _('This device is currently attached to VM(s): %s. Please detach it from all VMs first.').format(owners.join(', '))), 'error');
 			return;
 		}
 
@@ -161,11 +199,16 @@ return view.extend({
 				E('button', {
 					'class': 'btn cbi-button-negative',
 					'click': function() {
-						uci.remove('qemu-vms', section);
-						return uci.save().then(function() {
+						return callReleasePci(section).catch(function(err) {
+							ui.addNotification(null, E('p',
+								_('Warning: could not rebind device to its original driver: ') + err.message), 'warning');
+						}).then(function() {
+							uci.remove('qemu-vms', section);
+							self.cleanupVmReferences('pci_passthrough', section);
+							return uci.save();
+						}).then(function() {
 							ui.hideModal();
 							ui.addNotification(null, E('p', _('Passthrough removed for %s.').format(addr)), 'info');
-							// Обновляем представление без перезагрузки
 							self.updateView();
 						}).catch(function(err) {
 							ui.addNotification(null, E('p', _('Error saving: ') + err.message), 'error');
@@ -175,8 +218,6 @@ return view.extend({
 			])
 		]);
 	},
-
-	// --- Действия для USB ---
 
 	createUsbPassthrough: function(dev, ev) {
 		var self = this;
@@ -246,7 +287,6 @@ return view.extend({
 			ui.hideModal();
 			ui.addNotification(null, E('p',
 				_('USB passthrough section "%s" created for %s.').format(sectionName, dev.id)), 'info');
-			// Обновляем представление без перезагрузки
 			self.updateView();
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', _('Error saving: ') + err.message), 'error');
@@ -275,11 +315,16 @@ return view.extend({
 				E('button', {
 					'class': 'btn cbi-button-negative',
 					'click': function() {
-						uci.remove('qemu-vms', section);
-						return uci.save().then(function() {
+						return callReleaseUsb(section).catch(function(err) {
+							ui.addNotification(null, E('p',
+								_('Warning: could not rebind device to its original driver: ') + err.message), 'warning');
+						}).then(function() {
+							uci.remove('qemu-vms', section);
+							self.cleanupVmReferences('usb_passthrough', section);
+							return uci.save();
+						}).then(function() {
 							ui.hideModal();
 							ui.addNotification(null, E('p', _('Passthrough removed.')), 'info');
-							// Обновляем представление без перезагрузки
 							self.updateView();
 						}).catch(function(err) {
 							ui.addNotification(null, E('p', _('Error saving: ') + err.message), 'error');
@@ -290,15 +335,16 @@ return view.extend({
 		]);
 	},
 
-	// --- Рендеринг таблиц ---
-
 	renderPciTable: function(devices) {
 		var self = this;
 		var rows = devices.map(function(dev) {
 			var section = self.findPciSection(dev.addr);
-			var owner = self.pciOwner(dev.addr);
-			var passthroughStatus = section ? _('Passthrough active (section: %s)').format(section) : _('Not passthrough');
-			if (owner) passthroughStatus += ' ' + _('(attached to VM: %s)').format(owner);
+			//var owner = self.pciOwner(dev.addr);
+			var owners = self.pciOwners(dev.addr);
+			var owner = owners.length ? owners.join(', ') : null;
+			var passthroughStatus = section ? _('Active<br />Section: %s').format(section) : _('Not passthrough');
+			if (owner) passthroughStatus += ' ' + _('<br />Host: %s').format(owner);
+			
 
 			var actionButton;
 			if (section) {
@@ -325,11 +371,11 @@ return view.extend({
 
 		return E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, _('PCI address')),
+				E('th', { 'class': 'th' }, _('Address')),
 				E('th', { 'class': 'th' }, _('Vendor')),
 				E('th', { 'class': 'th' }, _('Device')),
-				E('th', { 'class': 'th' }, _('Current driver')),
-				E('th', { 'class': 'th' }, _('Passthrough status')),
+				E('th', { 'class': 'th' }, _('Driver')),
+				E('th', { 'class': 'th', 'style': 'min-width: 140px;' }, _('Status')),
 				E('th', { 'class': 'th' }, _('Action'))
 			])
 		].concat(rows));
@@ -343,8 +389,8 @@ return view.extend({
 			var section = (vendorId && productId) ? self.findUsbSection(vendorId, productId) : null;
 			var owners = (vendorId && productId) ? self.usbOwners(vendorId, productId) : [];
 
-			var passthroughStatus = section ? _('Passthrough active (section: %s)').format(section) : _('Not passthrough');
-			if (owners.length) passthroughStatus += ' ' + _('(attached to VM: %s)').format(owners.join(', '));
+			var passthroughStatus = section ? _('Active<br />Section: %s').format(section) : _('Not passthrough');
+			if (owners.length) passthroughStatus += ' ' + _('<br />Host: %s').format(owners.join(', '));
 
 			var actionButton;
 			if (section) {
@@ -371,23 +417,19 @@ return view.extend({
 		return E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
 				E('th', { 'class': 'th' }, _('Bus:Dev')),
-				E('th', { 'class': 'th' }, _('VendorID:ProductID')),
+				E('th', { 'class': 'th' }, _('VID:PID')),
 				E('th', { 'class': 'th' }, _('Description')),
-				E('th', { 'class': 'th' }, _('Passthrough status')),
+				E('th', { 'class': 'th', 'style': 'min-width: 140px;' }, _('Status')),
 				E('th', { 'class': 'th' }, _('Action'))
 			])
 		].concat(rows));
 	},
 
-	// --- Метод обновления представления ---
-
 	updateView: function() {
 		var self = this;
 		if (!this.container) return;
 
-		// Загружаем свежие данные
 		this.load().then(function(data) {
-			// Перерисовываем содержимое контейнера
 			var newContent = self.renderContent(data);
 			self.container.innerHTML = '';
 			self.container.appendChild(newContent);
@@ -396,8 +438,6 @@ return view.extend({
 		});
 	},
 
-	// --- Основной рендер ---
-
 	render: function(data) {
 		var hw = data[0];
 		var container = E('div', {});
@@ -405,26 +445,76 @@ return view.extend({
 		var content = this.renderContent(data);
 		container.appendChild(content);
 
-		// Сохраняем ссылку на контейнер для обновления
 		this.container = container;
 
 		return container;
 	},
 
-	// Вспомогательная функция для рендеринга контента (используется и в render, и в updateView)
 	renderContent: function(data) {
 		var hw = data[0];
-		return E('div', {}, [
-			E('h3', {}, _('PCI devices')),
+		var self = this;
+	
+		var description = E('div', { 'class': 'cbi-section' }, [
+			E('h2', {}, _('Hardware Passthrough')),
+				E('p', { 'class': 'cbi-section-descr' },
+				_('This page allows you to configure passthrough of PCI and USB devices to virtual machines. ') +
+				'<br />' + _('Changes take effect after VM restart.'))
+		]);
+
+		// tabs
+		var tabs = E('ul', { 'class': 'cbi-tabmenu' }, [
+			E('li', { 'class': 'cbi-tab', 'data-tab': 'pci' }, [
+				E('a', {
+					'href': '#',
+					'click': function(ev) {
+						ev.preventDefault();
+						self.switchTab('pci');
+					}
+				}, _('PCI devices'))
+			]),
+			E('li', { 'class': 'cbi-tab-disabled', 'data-tab': 'usb' }, [
+				E('a', {
+					'href': '#',
+					'click': function(ev) {
+						ev.preventDefault();
+						self.switchTab('usb');
+					}
+				}, _('USB devices'))
+			])
+		]);
+
+		var pciPanel = E('div', { 'class': 'cbi-tabpanel', 'id': 'pci-panel' }, [
 			E('p', { 'class': 'cbi-section-descr' },
 				_('PCI passthrough requires IOMMU enabled in the host BIOS and kernel command line (intel_iommu=on / amd_iommu=on), and the vfio-pci kernel module loaded.') +
-				' ' + _('Creating a passthrough section will bind the device to vfio-pci (if possible). Removing it will attempt to re-bind to the original driver.')),
-			this.renderPciTable(hw.pci || []),
+				'<br />' + _('Creating a passthrough section will bind the device to vfio-pci (if possible). Removing it will attempt to re-bind to the original driver.') +
+				'<br />' + _('Note: Some devices (especially Intel network cards) may require the vfio-pci module option "disable_idle_d3=1" to prevent them from entering a low-power state.') +
+				'<br />' + _('Change to "vfio-pci disable_idle_d3=1" in /etc/modules.d/vfio-pci if you encounter "No such device" errors.')),
+			this.renderPciTable(hw.pci || [])
+		]);
 
-			E('h3', { 'style': 'margin-top: 2em' }, _('USB devices')),
+		var usbPanel = E('div', { 'class': 'cbi-tabpanel', 'id': 'usb-panel', 'style': 'display:none;' }, [
 			E('p', { 'class': 'cbi-section-descr' },
 				_('USB passthrough is based on vendor/product ID. The device will be available to any VM that includes the corresponding USB passthrough section.')),
 			this.renderUsbTable(hw.usb || [])
 		]);
-	}
+
+		return E('div', {}, [description, tabs, pciPanel, usbPanel]);
+	},
+
+	switchTab: function(tab) {
+		// all tabs
+		var tabs = document.querySelectorAll('li.cbi-tab, li.cbi-tab-disabled');
+		tabs.forEach(function(el) {
+			if (el.dataset.tab === tab) {
+				el.className = 'cbi-tab';
+			} else {
+				el.className = 'cbi-tab-disabled';
+			}
+		});
+
+		var pciPanel = document.getElementById('pci-panel');
+		var usbPanel = document.getElementById('usb-panel');
+		if (pciPanel) pciPanel.style.display = (tab === 'pci') ? '' : 'none';
+		if (usbPanel) usbPanel.style.display = (tab === 'usb') ? '' : 'none';
+	},
 });

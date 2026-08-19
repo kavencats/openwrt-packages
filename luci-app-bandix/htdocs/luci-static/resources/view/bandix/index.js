@@ -556,8 +556,7 @@ return view.extend({
                 background-color: rgba(239, 68, 68, 0.2);
                 transform: translateY(-1px);
             }
-            
-            
+
             /* 移动端隐藏版本信息和更新徽章 */
             @media (max-width: 768px) {
                 .bandix-version-wrapper {
@@ -2975,7 +2974,8 @@ return view.extend({
                                     ])
                                 ]),
                                 E('div', { 'class': 'usage-ranking-query-presets' }, [
-                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'today' }, _('Today')),
+                                    E('button', { 'class': 'cbi-button cbi-button-positive', 'data-preset': 'today' }, _('Today')),
+                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'yesterday' }, _('Yesterday')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'thisweek' }, _('This Week')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'lastweek' }, _('Last Week')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'thismonth' }, _('This Month')),
@@ -2983,7 +2983,7 @@ return view.extend({
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '7days' }, _('Last 7 Days')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '30days' }, _('Last 30 Days')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '90days' }, _('Last 90 Days')),
-                                    E('button', { 'class': 'cbi-button cbi-button-positive', 'data-preset': '1year' }, _('Last Year'))
+                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '1year' }, _('Last Year'))
                                 ]),
                                 E('div', { 'class': 'usage-ranking-timeline', 'id': 'usage-ranking-timeline' }, [
                                     E('div', { 'class': 'usage-ranking-timeline-range', 'id': 'usage-ranking-timeline-range' })
@@ -3047,7 +3047,8 @@ return view.extend({
                                     ])
                                 ]),
                                 E('div', { 'class': 'usage-ranking-query-presets' }, [
-                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'today' }, _('Today')),
+                                    E('button', { 'class': 'cbi-button cbi-button-positive', 'data-preset': 'today' }, _('Today')),
+                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'yesterday' }, _('Yesterday')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'thisweek' }, _('This Week')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'lastweek' }, _('Last Week')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': 'thismonth' }, _('This Month')),
@@ -3055,7 +3056,7 @@ return view.extend({
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '7days' }, _('Last 7 Days')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '30days' }, _('Last 30 Days')),
                                     E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '90days' }, _('Last 90 Days')),
-                                    E('button', { 'class': 'cbi-button cbi-button-positive', 'data-preset': '1year' }, _('Last Year'))
+                                    E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-preset': '1year' }, _('Last Year'))
                                 ]),
                                 E('div', { 'class': 'usage-ranking-timeline', 'id': 'traffic-increments-timeline' }, [
                                     E('div', { 'class': 'usage-ranking-timeline-range', 'id': 'traffic-increments-timeline-range' })
@@ -7504,7 +7505,6 @@ return view.extend({
         updateDeviceData();
         refreshWhitelistStatus();
         fetchAllScheduleRules();
-        updateTrafficStatistics();
 
         // 初始化时间范围查询功能
         setTimeout(function () {
@@ -7631,6 +7631,12 @@ return view.extend({
                             startDate = new Date(today);
                             endDate = new Date(today);
                             break;
+                        case 'yesterday':
+                            var yesterdayDate = new Date(today);
+                            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+                            startDate = new Date(yesterdayDate);
+                            endDate = new Date(yesterdayDate);
+                            break;
                         case 'thisweek':
                             // 本周：周一到今天
                             var dayOfWeek = today.getDay(); // 0=周日, 1=周一, ..., 6=周六
@@ -7724,18 +7730,16 @@ return view.extend({
             // 重置按钮
             if (resetBtn) {
                 resetBtn.addEventListener('click', function () {
-                    var oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-                    setDateRange(oneYearAgo, today, '1year');
+                    setDateRange(today, today, 'today');
                     queryData();
                 });
             }
 
-            // 初始化：默认选择最近一年
-            var oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-            setDateRange(oneYearAgo, today, '1year');
+            // 初始化：默认选择今天
+            setDateRange(today, today, 'today');
 
             // 设置初始时间范围并自动加载数据（结束时间为当天的 23:59:59）
-            var startMs = oneYearAgo.getTime();
+            var startMs = todayMs;
             var endToday = new Date(today);
             endToday.setHours(23, 59, 59, 999);
             var endMs = endToday.getTime();
@@ -7896,6 +7900,12 @@ return view.extend({
                             startDate = new Date(today);
                             endDate = new Date(today);
                             break;
+                        case 'yesterday':
+                            var yesterdayDate = new Date(today);
+                            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+                            startDate = new Date(yesterdayDate);
+                            endDate = new Date(yesterdayDate);
+                            break;
                         case 'thisweek':
                             var dayOfWeek = today.getDay();
                             var mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
@@ -7952,15 +7962,13 @@ return view.extend({
             // 重置按钮
             if (resetBtn) {
                 resetBtn.addEventListener('click', function () {
-                    var oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-                    setDateRange(oneYearAgo, today, '1year');
+                    setDateRange(today, today, 'today');
                     queryData();
                 });
             }
 
-            // 初始化：默认选择最近一年
-            var oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-            setDateRange(oneYearAgo, today, '1year');
+            // 初始化：默认选择今天
+            setDateRange(today, today, 'today');
 
             startDateInput.addEventListener('change', function () {
                 updateTimeline(this.value, endDateInput.value);
@@ -7971,7 +7979,7 @@ return view.extend({
             });
 
             // 设置初始时间范围并自动加载数据（不显示 loading）
-            var startMs = oneYearAgo.getTime();
+            var startMs = todayMs;
             var endToday = new Date(today);
             endToday.setHours(23, 59, 59, 999);
             var endMs = endToday.getTime();
